@@ -1,0 +1,14 @@
+{
+  "name": "@chat/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "description": "Shared types and chat client for web/mobile/server",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
+
+

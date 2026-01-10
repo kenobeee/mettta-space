@@ -1,0 +1,29 @@
+{
+  "name": "chat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal video chat stack: web (Vite+React+TS), mobile (React Native), server (Node+WS).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "apps/web",
+    "apps/mobile",
+    "apps/server",
+    "packages/shared"
+  ],
+  "overrides": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "scripts": {
+    "dev:web": "npm --workspace web run dev",
+    "build:web": "npm --workspace web run build",
+    "preview:web": "npm --workspace web run preview",
+    "lint:web": "npm --workspace web run lint",
+    "dev:server": "npm --workspace server run dev",
+    "start:server": "npm --workspace server run start",
+    "dev:mobile": "npm --workspace mobile run start"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+dist
+.expo
+.expo-shared
+.DS_Store
+*.log
+pnpm-lock.yaml
+*.cache
+coverage
+.vercel
+.turbo
+.idea
+*.iml
+
