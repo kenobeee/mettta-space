@@ -60,6 +60,7 @@ function App() {
   const [lobbyId, setLobbyId] = useState<string | undefined>();
   const [users, setUsers] = useState<LobbyUser[]>([]);
   const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
+  const [selfMuted, setSelfMuted] = useState(false);
 
   const deviceIdRef = useRef<string>((() => {
     const key = 'mira_device_id';
@@ -131,6 +132,7 @@ function App() {
     setActive(new Set());
     setUsers([]);
     setLobbyId(undefined);
+    setSelfMuted(false);
     reset();
   }, [cleanupPeer, reset]);
 
@@ -323,6 +325,17 @@ function App() {
     []
   );
 
+  const toggleMute = useCallback(() => {
+    const next = !selfMuted;
+    setSelfMuted(next);
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getAudioTracks().forEach((t) => (t.enabled = !next));
+    }
+    clientRef.current?.sendStatus(next);
+    setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, muted: next } : u)));
+  }, [selfMuted]);
+
   useEffect(() => {
     const client = new ChatClient(WS_URL);
     clientRef.current = client;
@@ -339,6 +352,8 @@ function App() {
       setUsers(us);
       const meId = selfIdRef.current;
       if (!meId) return;
+      const me = us.find((u) => u.id === meId);
+      setSelfMuted(!!me?.muted);
       if (localStreamRef.current) {
         ensureAudioContext();
       }
@@ -374,6 +389,10 @@ function App() {
     const unsubSignal = client.on('signal', async ({ from, payload }) => {
       await handleSignal(from, payload as SignalPayload);
     });
+    const unsubStatus = client.on('userStatus', ({ userId, muted }) => {
+      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, muted } : u)));
+      if (userId === selfIdRef.current) setSelfMuted(muted);
+    });
     const unsubOpen = client.on('open', () => {
       setIsWsReady(true);
       client.sendDevice(deviceIdRef.current);
@@ -391,6 +410,7 @@ function App() {
       unsubLobbies();
       unsubLobbyState();
       unsubSignal();
+      unsubStatus();
       unsubOpen();
       unsubClose();
       unsubError();
@@ -409,9 +429,6 @@ function App() {
             <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
               macOS
             </a>
-            <a href="https://mettta.space/downloads/metttaspace-win.exe" className="dl-btn" download>
-              Windows
-            </a>
             <a href="https://mettta.space/downloads/metttaspace-linux.AppImage" className="dl-btn" download>
               Linux
             </a>
@@ -423,13 +440,29 @@ function App() {
 
         <div className="room">
           {lobbyId ? (
-            <ParticipantsGrid
-              users={users}
-              selfId={selfId}
-              active={active}
-              volumes={volumes}
+            <>
+              <ParticipantsGrid
+                users={users}
+                selfId={selfId}
+                active={active}
+                volumes={volumes}
               onVolume={handleVolume}
-            />
+              />
+              <div className="room-controls">
+                <div className="control-pill">
+                  <button
+                    className="pill-btn"
+                    onClick={toggleMute}
+                    aria-label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+                  >
+                    <span className={`pill-icon ${selfMuted ? 'muted' : ''}`}>{selfMuted ? '🔇' : '🎤'}</span>
+                  </button>
+                  <button className="pill-btn" aria-label="Демонстрация экрана">
+                    <span className="pill-icon">🖥️</span>
+                  </button>
+                </div>
+              </div>
+            </>
           ) : (
             <div className="placeholder">Select a lobby to join</div>
           )}

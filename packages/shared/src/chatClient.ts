@@ -18,6 +18,7 @@ export class ChatClient {
       lobbies: new Set(),
       lobbyState: new Set(),
       signal: new Set(),
+      userStatus: new Set(),
       error: new Set(),
       log: new Set()
     };
@@ -82,6 +83,9 @@ export class ChatClient {
         case 'signal':
           this.emit('signal', { from: parsed.from, payload: parsed.payload });
           break;
+        case 'userStatus':
+          this.emit('userStatus', { userId: parsed.userId, muted: parsed.muted });
+          break;
         case 'error':
           this.emit('error', parsed.message);
           break;
@@ -130,6 +134,10 @@ export class ChatClient {
 
   sendSignalTo(targetId: string, payload: unknown) {
     this.send({ type: 'signal', targetId, payload });
+  }
+
+  sendStatus(muted: boolean) {
+    this.send({ type: 'status', muted });
   }
 
   sendLog(level: 'debug' | 'info' | 'warn' | 'error', category: string, message: string, data?: unknown) {

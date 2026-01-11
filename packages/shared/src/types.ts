@@ -1,13 +1,14 @@
 export type ChatStatus = 'idle' | 'in-lobby' | 'error';
 
 export type LobbyInfo = { id: string; name: string; count: number; capacity: number };
-export type LobbyUser = { id: string; displayName: string };
+export type LobbyUser = { id: string; displayName: string; muted?: boolean };
 
 export type ClientMessage =
   | { type: 'clientInfo'; deviceId: string }
   | { type: 'listLobbies' }
   | { type: 'joinLobby'; lobbyId: string }
   | { type: 'leaveLobby' }
+  | { type: 'status'; muted: boolean }
   | { type: 'signal'; targetId: string; payload: unknown }
   | { type: 'clientLog'; level: 'debug' | 'info' | 'warn' | 'error'; category: string; message: string; data?: unknown };
 
@@ -16,6 +17,7 @@ export type ServerMessage =
   | { type: 'lobbies'; lobbies: LobbyInfo[] }
   | { type: 'lobbyState'; lobbyId: string; users: LobbyUser[] }
   | { type: 'signal'; from: string; payload: unknown }
+  | { type: 'userStatus'; userId: string; muted: boolean }
   | { type: 'error'; message: string };
 
 export type ChatEvents = {
@@ -25,6 +27,7 @@ export type ChatEvents = {
   lobbies: LobbyInfo[];
   lobbyState: { lobbyId: string; users: LobbyUser[] };
   signal: { from: string; payload: unknown };
+  userStatus: { userId: string; muted: boolean };
   error: string;
   log: string;
 };

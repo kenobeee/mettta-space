@@ -18,12 +18,14 @@ export function ParticipantsGrid({ users, selfId, active, volumes, onVolume }: P
       {users.map((u) => (
         <div
           key={u.id}
-          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''}`}
+          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''} ${u.muted ? 'muted' : ''}`}
         >
+          {u.muted && <span className="mic-icon">🔇</span>}
           <div className="avatar">{u.displayName.slice(0, 2).toUpperCase()}</div>
           <div className="name">{u.displayName}</div>
           {u.id !== selfId && (
             <div className="volume">
+              <span className="volume-icon">🔊</span>
               <input
                 type="range"
                 min={0}

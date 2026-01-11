@@ -24,5 +24,6 @@
     "start:server": "npm --workspace server run start",
     "dev:desktop": "npm --workspace desktop run dev",
     "build:desktop": "npm --workspace web run build && npm --workspace desktop run build:installers"
-  }
+  },
+  "devDependencies": {}
 }

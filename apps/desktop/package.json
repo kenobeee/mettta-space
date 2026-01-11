@@ -7,11 +7,11 @@
   "main": "main.js",
   "scripts": {
     "dev": "ELECTRON_START_URL=http://localhost:5173 electron .",
-    "build:installers": "rm -rf web-dist && cp -r ../web/dist ./web-dist && npx electron-builder -mwl --x64"
+    "build:installers": "rm -rf web-dist && cp -r ../web/dist ./web-dist && npx electron-builder -ml --x64"
   },
   "devDependencies": {
     "electron": "^33.2.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^26.4.0"
   },
   "build": {
     "appId": "space.mettta.desktop",

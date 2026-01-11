@@ -183,18 +183,10 @@ echo "💾 Копируем desktop инсталляторы..."
 sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER "mkdir -p $APP_DIR/frontend/downloads"
 
 MAC_INSTALLER=$(ls apps/desktop/dist/metttaspace-*.dmg 2>/dev/null | head -n 1)
-WIN_INSTALLER=$(ls apps/desktop/dist/metttaspace-*-win-*.exe 2>/dev/null | head -n 1)
-WIN_ZIP=$(ls apps/desktop/dist/metttaspace-*-win-*.zip 2>/dev/null | head -n 1)
 LIN_INSTALLER=$(ls apps/desktop/dist/metttaspace-*-linux-*.AppImage 2>/dev/null | head -n 1)
 
 if [ -n "$MAC_INSTALLER" ]; then
   sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$MAC_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-mac.dmg
-fi
-if [ -n "$WIN_INSTALLER" ]; then
-  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$WIN_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-win.exe
-fi
-if [ -n "$WIN_ZIP" ]; then
-  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$WIN_ZIP" $SERVER:$APP_DIR/frontend/downloads/metttaspace-win.zip
 fi
 if [ -n "$LIN_INSTALLER" ]; then
   sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$LIN_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-linux.AppImage

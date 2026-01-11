@@ -20,6 +20,8 @@ const lobbyByClient = new Map<string, string>(); // clientId -> lobbyId
 const lobbyUsers = new Map<string, LobbyUser[]>(); // lobbyId -> users
 const displayNames = new Map<string, string>();
 const deviceToClient = new Map<string, string>(); // deviceId -> clientId
+const mutedState = new Map<string, boolean>(); // clientId -> muted
+const muted = new Map<string, boolean>(); // clientId -> muted
 
 const randomName = () => {
   const names = [
@@ -157,9 +159,17 @@ const broadcastLobbies = () => {
 
 const sendLobbyState = (lobbyId: string) => {
   const users = lobbyUsers.get(lobbyId) ?? [];
-  const message: ServerMessage = { type: 'lobbyState', lobbyId, users };
-  for (const user of users) {
+  const enriched = users.map((u) => ({ ...u, muted: mutedState.get(u.id) ?? false }));
+  const message: ServerMessage = { type: 'lobbyState', lobbyId, users: enriched };
+  for (const user of enriched) {
     sendToClient(user.id, message);
+  }
+};
+
+const broadcastStatus = (lobbyId: string, userId: string, muted: boolean) => {
+  const users = lobbyUsers.get(lobbyId) ?? [];
+  for (const user of users) {
+    sendToClient(user.id, { type: 'userStatus', userId, muted });
   }
 };
 
@@ -170,6 +180,7 @@ const leaveCurrentLobby = (clientId: string) => {
   const filtered = users.filter((u) => u.id !== clientId);
   lobbyUsers.set(lobbyId, filtered);
   lobbyByClient.delete(clientId);
+  muted.delete(clientId);
   broadcastLobbies();
   sendLobbyState(lobbyId);
 };
@@ -246,7 +257,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       leaveCurrentLobby(clientId);
       const name = displayNames.get(clientId) ?? randomName();
       displayNames.set(clientId, name);
-      lobbyUsers.set(lobby.id, [...users, { id: clientId, displayName: name }]);
+      lobbyUsers.set(lobby.id, [...users, { id: clientId, displayName: name, muted: mutedState.get(clientId) ?? false }]);
       lobbyByClient.set(clientId, lobby.id);
       broadcastLobbies();
       sendLobbyState(lobby.id);
@@ -270,8 +281,35 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       sendToClient(targetId, { type: 'signal', from: clientId, payload: data.payload });
       break;
     }
+    case 'status': {
+      mutedState.set(clientId, !!data.muted);
+      const lobbyId = lobbyByClient.get(clientId);
+      if (lobbyId) {
+        const users = lobbyUsers.get(lobbyId) ?? [];
+        users.forEach((u) => {
+          if (u.id === clientId) u.muted = !!data.muted;
+        });
+        lobbyUsers.set(lobbyId, users);
+        sendLobbyState(lobbyId);
+      }
+      break;
+    }
     case 'clientLog': {
       writeClientLog(clientId, data.level, data.category, data.message, data.data);
+      break;
+    }
+    case 'status': {
+      mutedState.set(clientId, !!data.muted);
+      const lobbyId = lobbyByClient.get(clientId);
+      if (lobbyId) {
+        const users = lobbyUsers.get(lobbyId) ?? [];
+        lobbyUsers.set(
+          lobbyId,
+          users.map((u) => (u.id === clientId ? { ...u, muted: !!data.muted } : u))
+        );
+        sendLobbyState(lobbyId);
+        broadcastStatus(lobbyId, clientId, !!data.muted);
+      }
       break;
     }
     default:
