@@ -2,15 +2,15 @@
   "name": "chat",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal video chat stack: web (Vite+React+TS), mobile (React Native), server (Node+WS).",
+  "description": "Minimal audio chat stack: web (Vite+React+TS), server (Node+WS), desktop (Electron).",
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "workspaces": [
     "apps/web",
-    "apps/mobile",
     "apps/server",
+    "apps/desktop",
     "packages/shared"
   ],
   "overrides": {
@@ -20,10 +20,9 @@
   "scripts": {
     "dev:web": "npm --workspace web run dev",
     "build:web": "npm --workspace web run build",
-    "preview:web": "npm --workspace web run preview",
-    "lint:web": "npm --workspace web run lint",
     "dev:server": "npm --workspace server run dev",
     "start:server": "npm --workspace server run start",
-    "dev:mobile": "npm --workspace mobile run start"
+    "dev:desktop": "npm --workspace desktop run dev",
+    "build:desktop": "npm --workspace web run build && npm --workspace desktop run build:installers"
   }
 }

@@ -1,0 +1,35 @@
+{
+  "name": "desktop",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Desktop shell for mettta.space (Electron)",
+  "author": "mettta.space",
+  "main": "main.js",
+  "scripts": {
+    "dev": "ELECTRON_START_URL=http://localhost:5173 electron .",
+    "build:installers": "rm -rf web-dist && cp -r ../web/dist ./web-dist && npx electron-builder -mwl --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "space.mettta.desktop",
+    "productName": "metttaspace",
+    "artifactName": "metttaspace-${version}-${os}-${arch}.${ext}",
+    "electronVersion": "33.2.0",
+    "files": [
+      "**/*",
+      "web-dist/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.social-networking"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Chat"
+    }
+  }
+}

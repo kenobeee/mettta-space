@@ -2,7 +2,7 @@
 set -e
 
 SERVER="root@85.198.100.83"
-DOMAIN="shalyaev.ru"
+DOMAIN="mettta.space"
 APP_DIR="/var/www/mira"
 SERVICE_NAME="mira-server"
 
@@ -20,6 +20,10 @@ sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER << 'EOF'
 mkdir -p /var/www/mira/{frontend,backend}
 mkdir -p /var/www/mira/backend/src
 EOF
+
+# Собираем десктопные инсталляторы (локально)
+echo "💻 Собираем desktop инсталляторы локально (mac/win/linux)..."
+npm run build:desktop
 
 # Копируем фронтенд
 echo "📦 Копируем фронтенд..."
@@ -121,7 +125,7 @@ fi
 # Получаем SSL сертификат (если ещё нет)
 if [ ! -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]; then
     echo "🔒 Получаем SSL сертификат..."
-    certbot certonly --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN --keep-until-expiring || echo "⚠️  Не удалось получить сертификат. Проверьте DNS настройки."
+    certbot certonly --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN --force-renewal || echo "⚠️  Не удалось получить сертификат. Проверьте DNS настройки."
 fi
 
 # Если сертификат получен, переключаемся на полный конфиг с SSL
@@ -152,8 +156,8 @@ relay-ip=85.198.100.83
 external-ip=85.198.100.83
 fingerprint
 lt-cred-mech
-realm=shalyaev.ru
-server-name=shalyaev.ru
+realm=mettta.space
+server-name=mettta.space
 user=mira:mira_turn_secret
 total-quota=100
 stale-nonce
@@ -162,8 +166,8 @@ no-multicast-peers
 no-sslv3
 no-tlsv1
 no-tlsv1_1
-cert=/etc/letsencrypt/live/shalyaev.ru/fullchain.pem
-private-key=/etc/letsencrypt/live/shalyaev.ru/privkey.pem
+cert=/etc/letsencrypt/live/mettta.space/fullchain.pem
+private-key=/etc/letsencrypt/live/mettta.space/privkey.pem
 no-stdout-log
 log-file=/var/log/turnserver/turn.log
 allowed-peer-ip=0.0.0.0-255.255.255.255
@@ -173,6 +177,28 @@ CONF
 systemctl enable coturn
 systemctl restart coturn
 EOF
+
+# Копируем desktop инсталляторы
+echo "💾 Копируем desktop инсталляторы..."
+sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER "mkdir -p $APP_DIR/frontend/downloads"
+
+MAC_INSTALLER=$(ls apps/desktop/dist/metttaspace-*.dmg 2>/dev/null | head -n 1)
+WIN_INSTALLER=$(ls apps/desktop/dist/metttaspace-*-win-*.exe 2>/dev/null | head -n 1)
+WIN_ZIP=$(ls apps/desktop/dist/metttaspace-*-win-*.zip 2>/dev/null | head -n 1)
+LIN_INSTALLER=$(ls apps/desktop/dist/metttaspace-*-linux-*.AppImage 2>/dev/null | head -n 1)
+
+if [ -n "$MAC_INSTALLER" ]; then
+  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$MAC_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-mac.dmg
+fi
+if [ -n "$WIN_INSTALLER" ]; then
+  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$WIN_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-win.exe
+fi
+if [ -n "$WIN_ZIP" ]; then
+  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$WIN_ZIP" $SERVER:$APP_DIR/frontend/downloads/metttaspace-win.zip
+fi
+if [ -n "$LIN_INSTALLER" ]; then
+  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$LIN_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-linux.AppImage
+fi
 
 echo "🎉 Деплой завершён!"
 echo "🌐 Откройте https://$DOMAIN в браузере"

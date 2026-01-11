@@ -8,11 +8,8 @@ type TrackedSocket = WebSocket & { isAlive?: boolean };
 
 const PORT = Number(process.env.PORT ?? 3001);
 const LOBBIES: LobbyInfo[] = [
-  { id: 'l1', name: 'Сириус', count: 0, capacity: 0 },
-  { id: 'l2', name: 'Вега', count: 0, capacity: 0 },
-  { id: 'l3', name: 'Арктур', count: 0, capacity: 0 },
-  { id: 'l4', name: 'Поллукс', count: 0, capacity: 0 },
-  { id: 'l5', name: 'Альтаир', count: 0, capacity: 0 }
+  { id: 'l1', name: 'TTT daily', count: 0, capacity: 0 },
+  { id: 'l2', name: 'Mascot daily', count: 0, capacity: 0 }
 ];
 
 const httpServer = createServer();

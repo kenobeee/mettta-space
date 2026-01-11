@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name shalyaev.ru www.shalyaev.ru;
+    server_name mettta.space;
 
     # Let's Encrypt challenge
     location /.well-known/acme-challenge/ {

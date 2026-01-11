@@ -12,9 +12,12 @@ type SignalPayload = {
   candidate?: RTCIceCandidateInit;
 };
 
+  const DESKTOP_WS_FALLBACK = import.meta.env.VITE_DESKTOP_WS_URL ?? 'wss://mettta.space/ws';
 const WS_URL =
   import.meta.env.VITE_WS_URL ??
-  `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+  (window.location.protocol === 'app:'
+    ? DESKTOP_WS_FALLBACK
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
 
@@ -56,6 +59,7 @@ function App() {
   const [lobbies, setLobbies] = useState<LobbyInfo[]>([]);
   const [lobbyId, setLobbyId] = useState<string | undefined>();
   const [users, setUsers] = useState<LobbyUser[]>([]);
+  const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
 
   const deviceIdRef = useRef<string>((() => {
     const key = 'mira_device_id';
@@ -398,6 +402,22 @@ function App() {
 
   return (
     <div className="page audio">
+      {!isDesktopEnv && (
+        <div className="top-banner">
+          <div className="logo">mettta.space</div>
+          <div className="downloads">
+            <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
+              macOS
+            </a>
+            <a href="https://mettta.space/downloads/metttaspace-win.exe" className="dl-btn" download>
+              Windows
+            </a>
+            <a href="https://mettta.space/downloads/metttaspace-linux.AppImage" className="dl-btn" download>
+              Linux
+            </a>
+          </div>
+        </div>
+      )}
       <div className="layout">
         <LobbyList lobbies={lobbies} lobbyId={lobbyId} isWsReady={isWsReady} onJoin={joinLobby} onLeave={leaveLobby} />
 
@@ -416,7 +436,7 @@ function App() {
         </div>
       </div>
       {lastError && <div className="error">Error: {lastError}</div>}
-    </div>
+      </div>
   );
 }
 
