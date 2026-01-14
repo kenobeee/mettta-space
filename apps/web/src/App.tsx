@@ -22,19 +22,31 @@ const WS_URL =
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
 
 const ICE_SERVERS: RTCIceServer[] = (() => {
-  const servers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
-  const turnUrlsEnv = (import.meta.env.VITE_TURN_URL ?? '').split(',').map((s: string) => s.trim()).filter(Boolean);
-  const turnUrlsDefault = [
-    'turn:shalyaev.ru:3478?transport=udp',
-    'turn:shalyaev.ru:3478?transport=tcp',
-    'turns:shalyaev.ru:5349?transport=tcp'
+  const urlsEnv = (import.meta.env.VITE_TURN_URL ?? '')
+    .split(',')
+    .map((s: string) => s.trim())
+    .filter((s: string): s is string => Boolean(s));
+
+  const defaultStun = ['stun:mettta.space:3478', 'stun:85.198.100.83:3478'];
+  const defaultTurn = [
+    'turn:mettta.space:3478?transport=udp',
+    'turn:mettta.space:3478?transport=tcp',
+    'turn:85.198.100.83:3478?transport=udp',
+    'turn:85.198.100.83:3478?transport=tcp'
   ];
-  const turnUrls = turnUrlsEnv.length ? turnUrlsEnv : turnUrlsDefault;
-  servers.push({
-    urls: turnUrls,
-    username: import.meta.env.VITE_TURN_USERNAME ?? 'mira',
-    credential: import.meta.env.VITE_TURN_PASSWORD ?? 'mira_turn_secret'
-  });
+
+  const stunUrls = urlsEnv.filter((u: string) => u.startsWith('stun:'));
+  const turnUrls = urlsEnv.filter((u: string) => u.startsWith('turn:'));
+
+  const servers: RTCIceServer[] = [
+    { urls: stunUrls.length ? stunUrls : defaultStun },
+    {
+      urls: turnUrls.length ? turnUrls : defaultTurn,
+      username: import.meta.env.VITE_TURN_USERNAME ?? 'mira',
+      credential: import.meta.env.VITE_TURN_PASSWORD ?? 'mira_turn_secret'
+    }
+  ];
+
   return servers;
 })();
 
@@ -73,18 +85,32 @@ function App() {
 
   const ensureLocalAudio = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
-    const stream = await navigator.mediaDevices.getUserMedia({
+
+    const primaryConstraints: MediaStreamConstraints = {
       audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
+        echoCancellation: true,
+        noiseSuppression: true,
         autoGainControl: false,
-        channelCount: 2,
+        channelCount: 1,
         sampleRate: 48000
       },
       video: false
-    });
-    localStreamRef.current = stream;
-    return stream;
+    };
+
+    const fallbackConstraints: MediaStreamConstraints = { audio: true, video: false };
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(primaryConstraints);
+      localStreamRef.current = stream;
+      const track = stream.getAudioTracks()[0];
+      if (track?.contentHint === '') track.contentHint = 'speech';
+      return stream;
+    } catch (err) {
+      logger.error('WebRTC', 'getUserMedia failed with tuned constraints, retrying with defaults', { err });
+      const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+      localStreamRef.current = stream;
+      return stream;
+    }
   }, []);
 
   const cleanupPeer = useCallback((peerId: string) => {
