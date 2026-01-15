@@ -19,6 +19,8 @@ export class ChatClient {
       lobbyState: new Set(),
       signal: new Set(),
       userStatus: new Set(),
+      screenSharer: new Set(),
+      hand: new Set(),
       error: new Set(),
       log: new Set()
     };
@@ -86,6 +88,12 @@ export class ChatClient {
         case 'userStatus':
           this.emit('userStatus', { userId: parsed.userId, muted: parsed.muted });
           break;
+        case 'screenSharer':
+          this.emit('screenSharer', { userId: parsed.userId });
+          break;
+        case 'hand':
+          this.emit('hand', { userId: parsed.userId, raised: parsed.raised });
+          break;
         case 'error':
           this.emit('error', parsed.message);
           break;
@@ -138,6 +146,14 @@ export class ChatClient {
 
   sendStatus(muted: boolean) {
     this.send({ type: 'status', muted });
+  }
+
+  sendScreenShare(action: 'start' | 'stop') {
+    this.send({ type: 'screenShare', action });
+  }
+
+  sendHand(raised: boolean) {
+    this.send({ type: 'hand', raised });
   }
 
   sendLog(level: 'debug' | 'info' | 'warn' | 'error', category: string, message: string, data?: unknown) {

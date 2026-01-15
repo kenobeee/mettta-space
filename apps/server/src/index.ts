@@ -22,6 +22,8 @@ const displayNames = new Map<string, string>();
 const deviceToClient = new Map<string, string>(); // deviceId -> clientId
 const mutedState = new Map<string, boolean>(); // clientId -> muted
 const muted = new Map<string, boolean>(); // clientId -> muted
+const screenSharerByLobby = new Map<string, string | null>();
+const handState = new Map<string, boolean>(); // clientId -> hand
 
 const randomName = () => {
   const names = [
@@ -159,7 +161,13 @@ const broadcastLobbies = () => {
 
 const sendLobbyState = (lobbyId: string) => {
   const users = lobbyUsers.get(lobbyId) ?? [];
-  const enriched = users.map((u) => ({ ...u, muted: mutedState.get(u.id) ?? false }));
+  const sharer = screenSharerByLobby.get(lobbyId) ?? null;
+  const enriched = users.map((u) => ({
+    ...u,
+    muted: mutedState.get(u.id) ?? false,
+    isScreenSharer: sharer === u.id,
+    handRaised: handState.get(u.id) ?? false
+  }));
   const message: ServerMessage = { type: 'lobbyState', lobbyId, users: enriched };
   for (const user of enriched) {
     sendToClient(user.id, message);
@@ -181,6 +189,10 @@ const leaveCurrentLobby = (clientId: string) => {
   lobbyUsers.set(lobbyId, filtered);
   lobbyByClient.delete(clientId);
   muted.delete(clientId);
+  if (screenSharerByLobby.get(lobbyId) === clientId) {
+    screenSharerByLobby.set(lobbyId, null);
+  }
+  handState.delete(clientId);
   broadcastLobbies();
   sendLobbyState(lobbyId);
 };
@@ -294,22 +306,50 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       }
       break;
     }
-    case 'clientLog': {
-      writeClientLog(clientId, data.level, data.category, data.message, data.data);
+    case 'screenShare': {
+      const lobbyId = lobbyByClient.get(clientId);
+      if (!lobbyId) break;
+      const current = screenSharerByLobby.get(lobbyId) ?? null;
+      if (data.action === 'start') {
+        if (current && current !== clientId) {
+          // already someone sharing; ignore
+          break;
+        }
+        screenSharerByLobby.set(lobbyId, clientId);
+        sendLobbyState(lobbyId);
+        const users = lobbyUsers.get(lobbyId) ?? [];
+        for (const u of users) {
+          sendToClient(u.id, { type: 'screenSharer', userId: clientId });
+        }
+      } else {
+        if (current === clientId) {
+          screenSharerByLobby.set(lobbyId, null);
+          sendLobbyState(lobbyId);
+          const users = lobbyUsers.get(lobbyId) ?? [];
+          for (const u of users) {
+            sendToClient(u.id, { type: 'screenSharer', userId: null });
+          }
+        }
+      }
       break;
     }
-    case 'status': {
-      mutedState.set(clientId, !!data.muted);
+    case 'hand': {
       const lobbyId = lobbyByClient.get(clientId);
-      if (lobbyId) {
-        const users = lobbyUsers.get(lobbyId) ?? [];
-        lobbyUsers.set(
-          lobbyId,
-          users.map((u) => (u.id === clientId ? { ...u, muted: !!data.muted } : u))
-        );
-        sendLobbyState(lobbyId);
-        broadcastStatus(lobbyId, clientId, !!data.muted);
+      if (!lobbyId) break;
+      handState.set(clientId, !!data.raised);
+      const users = lobbyUsers.get(lobbyId) ?? [];
+      lobbyUsers.set(
+        lobbyId,
+        users.map((u) => (u.id === clientId ? { ...u, handRaised: !!data.raised } : u))
+      );
+      sendLobbyState(lobbyId);
+      for (const u of users) {
+        sendToClient(u.id, { type: 'hand', userId: clientId, raised: !!data.raised });
       }
+      break;
+    }
+    case 'clientLog': {
+      writeClientLog(clientId, data.level, data.category, data.message, data.data);
       break;
     }
     default:

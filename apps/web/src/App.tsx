@@ -27,13 +27,8 @@ const ICE_SERVERS: RTCIceServer[] = (() => {
     .map((s: string) => s.trim())
     .filter((s: string): s is string => Boolean(s));
 
-  const defaultStun = ['stun:mettta.space:3478', 'stun:85.198.100.83:3478'];
-  const defaultTurn = [
-    'turn:mettta.space:3478?transport=udp',
-    'turn:mettta.space:3478?transport=tcp',
-    'turn:85.198.100.83:3478?transport=udp',
-    'turn:85.198.100.83:3478?transport=tcp'
-  ];
+  const defaultStun = ['stun:mettta.space:3478'];
+  const defaultTurn = ['turn:mettta.space:3478?transport=udp'];
 
   const stunUrls = urlsEnv.filter((u: string) => u.startsWith('stun:'));
   const turnUrls = urlsEnv.filter((u: string) => u.startsWith('turn:'));
@@ -56,11 +51,17 @@ function App() {
   const clientRef = useRef<ChatClient | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const screenTransceiversRef = useRef<Map<string, RTCRtpTransceiver>>(new Map());
+  const screenStreamsRef = useRef<Map<string, MediaStream>>(new Map());
+  const makingOfferRef = useRef<Map<string, boolean>>(new Map());
+  const ignoreOfferRef = useRef<Map<string, boolean>>(new Map());
+  const settingRemoteAnswerRef = useRef<Map<string, boolean>>(new Map());
   const pendingRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const remoteAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<Map<string, AnalyserNode>>(new Map());
   const rafRef = useRef<number | null>(null);
+  const overlayIntentRef = useRef<string | null>(null);
   const [active, setActive] = useState<Set<string>>(new Set());
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const volumesRef = useRef<Map<string, number>>(new Map());
@@ -72,7 +73,15 @@ function App() {
   const [lobbyId, setLobbyId] = useState<string | undefined>();
   const [users, setUsers] = useState<LobbyUser[]>([]);
   const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
-  const [selfMuted, setSelfMuted] = useState(false);
+  const [selfMuted, setSelfMuted] = useState(true);
+  const [selfHandRaised, setSelfHandRaised] = useState(false);
+  const [screenSharerId, setScreenSharerId] = useState<string | null>(null);
+  const screenSharerIdRef = useRef<string | null>(null);
+  const [screenOverlayOpen, setScreenOverlayOpen] = useState(false);
+  const [screenOverlayPeerId, setScreenOverlayPeerId] = useState<string | null>(null);
+  const screenOverlayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const [screenOverlayLoading, setScreenOverlayLoading] = useState(false);
 
   const deviceIdRef = useRef<string>((() => {
     const key = 'mira_device_id';
@@ -117,6 +126,7 @@ function App() {
     const pc = pcsRef.current.get(peerId);
     if (pc) pc.close();
     pcsRef.current.delete(peerId);
+    screenTransceiversRef.current.delete(peerId);
     pendingRef.current.delete(peerId);
     const audio = remoteAudioRef.current.get(peerId);
     if (audio) {
@@ -145,6 +155,25 @@ function App() {
     for (const peerId of pcsRef.current.keys()) {
       cleanupPeer(peerId);
     }
+    if (screenSharerIdRef.current === selfIdRef.current) {
+      clientRef.current?.sendScreenShare('stop');
+    }
+    screenTransceiversRef.current.clear();
+    screenStreamsRef.current.forEach((s) => s.getTracks().forEach((t) => t.stop()));
+    screenStreamsRef.current.clear();
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+    }
+    setScreenSharerId(null);
+    screenSharerIdRef.current = null;
+    setScreenOverlayOpen(false);
+    setScreenOverlayPeerId(null);
+    setScreenOverlayLoading(false);
+    overlayIntentRef.current = null;
+    if (screenOverlayVideoRef.current) {
+      screenOverlayVideoRef.current.srcObject = null;
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
@@ -158,7 +187,8 @@ function App() {
     setActive(new Set());
     setUsers([]);
     setLobbyId(undefined);
-    setSelfMuted(false);
+    setSelfMuted(true);
+    setSelfHandRaised(false);
     reset();
   }, [cleanupPeer, reset]);
 
@@ -187,6 +217,22 @@ function App() {
     }
   }, []);
 
+  const attachScreen = useCallback((peerId: string, stream: MediaStream) => {
+    setScreenOverlayPeerId(peerId);
+    setScreenOverlayOpen(true);
+    setScreenOverlayLoading(true);
+    const videoEl = screenOverlayVideoRef.current;
+    if (videoEl) {
+      videoEl.srcObject = stream;
+      videoEl.muted = true;
+      const onReady = () => setScreenOverlayLoading(false);
+      videoEl.onloadeddata = onReady;
+      videoEl.onplaying = onReady;
+      videoEl.play().catch(() => {});
+    }
+    overlayIntentRef.current = null;
+  }, []);
+
   const flushPending = useCallback(async (peerId: string, pc: RTCPeerConnection) => {
     const queue = pendingRef.current.get(peerId);
     if (!queue?.length) return;
@@ -196,6 +242,22 @@ function App() {
       await pc.addIceCandidate(cand).catch((err) => logger.error('WebRTC', 'Failed to add queued ICE', { err }));
     }
   }, []);
+
+  const renegotiatePeer = useCallback(
+    async (peerId: string, pc: RTCPeerConnection) => {
+      if (makingOfferRef.current.get(peerId)) return;
+      makingOfferRef.current.set(peerId, true);
+      try {
+        await pc.setLocalDescription(await pc.createOffer());
+        clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
+      } catch (err) {
+        logger.error('WebRTC', 'Renegotiation failed', { peerId, err });
+      } finally {
+        makingOfferRef.current.set(peerId, false);
+      }
+    },
+    []
+  );
 
   const createPeerConnection = useCallback(
     async (peerId: string, initiator: boolean) => {
@@ -209,6 +271,28 @@ function App() {
       });
       pcsRef.current.set(peerId, pc);
       pendingRef.current.set(peerId, []);
+
+      const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      // Prefer VP8 for compatibility (Windows/Safari) and screen content
+      const capabilities = RTCRtpSender.getCapabilities('video');
+      if (capabilities?.codecs) {
+        const vp8First = capabilities.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8');
+        const rest = capabilities.codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/vp8');
+        const prefs = vp8First.concat(rest);
+        try {
+          videoTransceiver.setCodecPreferences(prefs);
+        } catch {
+          // ignore if not supported
+        }
+      }
+      screenTransceiversRef.current.set(peerId, videoTransceiver);
+      if (screenStreamRef.current) {
+        const track = screenStreamRef.current.getVideoTracks()[0];
+        if (track) {
+          videoTransceiver.sender.replaceTrack(track).catch(() => {});
+          videoTransceiver.direction = 'sendrecv';
+        }
+      }
 
       const local = await ensureLocalAudio();
       local.getTracks().forEach((t) => {
@@ -244,36 +328,76 @@ function App() {
       };
 
       pc.ontrack = (event) => {
-        const stream = event.streams[0];
-        let audio = remoteAudioRef.current.get(peerId);
-        if (!audio) {
-          audio = new Audio();
-          audio.autoplay = true;
-          // @ts-expect-error playsInline not in typings
-          audio.playsInline = true;
-          remoteAudioRef.current.set(peerId, audio);
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        if (event.track.kind === 'audio') {
+          let audio = remoteAudioRef.current.get(peerId);
+          if (!audio) {
+            audio = new Audio();
+            audio.autoplay = true;
+            // @ts-expect-error playsInline not in typings
+            audio.playsInline = true;
+            remoteAudioRef.current.set(peerId, audio);
+          }
+          const vol = volumesRef.current.get(peerId) ?? 1;
+          volumesRef.current.set(peerId, vol);
+          audio.volume = vol;
+          audio.srcObject = stream;
+          audio.play().catch(() => {});
+          ensureAudioContext();
+          const ctx = audioCtxRef.current;
+          if (ctx) {
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyserRef.current.set(peerId, analyser);
+          }
         }
-        const vol = volumesRef.current.get(peerId) ?? 1;
-        volumesRef.current.set(peerId, vol);
-        audio.volume = vol;
-        audio.srcObject = stream;
-        audio.play().catch(() => {});
-        ensureAudioContext();
-        const ctx = audioCtxRef.current;
-        if (ctx) {
-          const source = ctx.createMediaStreamSource(stream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 256;
-          source.connect(analyser);
-          analyserRef.current.set(peerId, analyser);
+
+        if (event.track.kind === 'video') {
+          screenStreamsRef.current.set(peerId, stream);
+          const currentSharer = screenSharerIdRef.current;
+          const wanted = overlayIntentRef.current ?? currentSharer;
+          const videoEl = screenOverlayVideoRef.current;
+          if (videoEl && screenOverlayPeerId === peerId) {
+            videoEl.srcObject = stream;
+            videoEl.play().catch(() => {});
+          }
+          if (wanted === peerId) {
+            attachScreen(peerId, stream);
+          }
+          event.track.onunmute = () => {
+            const videoEl = screenOverlayVideoRef.current;
+            if (videoEl && screenOverlayPeerId === peerId) {
+              videoEl.srcObject = stream;
+              videoEl.play().catch(() => {});
+              setScreenOverlayLoading(false);
+            } else if (overlayIntentRef.current === peerId) {
+              attachScreen(peerId, stream);
+            }
+          };
+          event.track.onended = () => {
+            const v = screenStreamsRef.current.get(peerId);
+            if (v) v.getTracks().forEach((t) => t.stop());
+            screenStreamsRef.current.delete(peerId);
+            if (screenOverlayPeerId === peerId) {
+              setScreenOverlayOpen(false);
+              setScreenOverlayPeerId(null);
+              if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
+            }
+          };
         }
       };
 
       if (initiator) {
-        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
         await pc.setLocalDescription(offer);
         clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
       }
+
+      pc.onnegotiationneeded = async () => {
+        await renegotiatePeer(peerId, pc);
+      };
 
       return pc;
     },
@@ -288,17 +412,45 @@ function App() {
       }
       if (!pc) return;
       if (payload.sdp) {
-        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        const offerCollision =
+          payload.sdp.type === 'offer' && (makingOfferRef.current.get(from) || pc.signalingState !== 'stable');
+        if (offerCollision && pc.signalingState !== 'stable') {
+          try {
+            await pc.setLocalDescription({ type: 'rollback', sdp: undefined });
+          } catch (err) {
+            logger.error('WebRTC', 'rollback failed', { err });
+          }
+        }
+        ignoreOfferRef.current.set(from, false);
+        settingRemoteAnswerRef.current.set(from, payload.sdp.type === 'answer');
+        try {
+          if (payload.sdp.type === 'answer' && pc.signalingState !== 'have-local-offer') {
+            // Ответ пришёл, но локального оффера нет — игнор, чтобы не словить InvalidState
+            settingRemoteAnswerRef.current.set(from, false);
+            return;
+          }
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        } catch (err) {
+          logger.error('WebRTC', 'setRemoteDescription failed', { err });
+          settingRemoteAnswerRef.current.set(from, false);
+          return;
+        }
+        settingRemoteAnswerRef.current.set(from, false);
         await flushPending(from, pc);
         if (payload.sdp.type === 'offer') {
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          clientRef.current?.sendSignalTo(from, { sdp: pc.localDescription });
+          try {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            clientRef.current?.sendSignalTo(from, { sdp: pc.localDescription });
+          } catch (err) {
+            logger.error('WebRTC', 'createAnswer/setLocalDescription failed', { err });
+          }
         }
         return;
       }
       if (payload.candidate) {
-        if (!pc.remoteDescription) {
+        if (ignoreOfferRef.current.get(from)) return;
+        if (!pc.remoteDescription || settingRemoteAnswerRef.current.get(from)) {
           const list = pendingRef.current.get(from) ?? [];
           list.push(payload.candidate);
           pendingRef.current.set(from, list);
@@ -313,12 +465,111 @@ function App() {
   );
 
 
+  const setLocalMuteState = useCallback(
+    (mute: boolean) => {
+      setSelfMuted(mute);
+      const stream = localStreamRef.current;
+      if (stream) {
+        stream.getAudioTracks().forEach((t) => (t.enabled = !mute));
+      }
+      clientRef.current?.sendStatus(mute);
+      setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, muted: mute } : u)));
+    },
+    []
+  );
+
+  const toggleMute = useCallback(() => {
+    setLocalMuteState(!selfMuted);
+  }, [selfMuted, setLocalMuteState]);
+
+  const stopScreenShareInternal = useCallback(() => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+    }
+    screenTransceiversRef.current.forEach((tr) => {
+      tr.sender.replaceTrack(null).catch(() => {});
+      tr.direction = 'recvonly';
+    });
+    pcsRef.current.forEach((pc, peerId) => {
+      renegotiatePeer(peerId, pc);
+    });
+    clientRef.current?.sendScreenShare('stop');
+    setScreenSharerId(null);
+    screenSharerIdRef.current = null;
+    setUsers((prev) => prev.map((u) => ({ ...u, isScreenSharer: false })));
+  }, [renegotiatePeer]);
+
+  const startScreenShare = useCallback(async () => {
+    if (screenStreamRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 60, max: 60 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      const track = stream.getVideoTracks()[0];
+      if (!track) return;
+      if (track.contentHint !== 'detail') {
+        track.contentHint = 'detail';
+      }
+      screenStreamRef.current = stream;
+      track.onended = () => {
+        stopScreenShareInternal();
+      };
+
+      screenTransceiversRef.current.forEach((tr) => {
+        const sender = tr.sender;
+        const params = sender.getParameters();
+        params.encodings = params.encodings?.length ? params.encodings : [{}];
+        params.encodings.forEach((enc) => {
+          enc.maxBitrate = 4_000_000;
+          enc.scaleResolutionDownBy = 1;
+        });
+        sender.setParameters(params).catch(() => {});
+        sender.replaceTrack(track).catch(() => {});
+        tr.direction = 'sendrecv';
+      });
+      // Гарантированная ренегоциация после подмены трека
+      for (const [peerId, pc] of pcsRef.current.entries()) {
+        await renegotiatePeer(peerId, pc);
+      }
+
+      clientRef.current?.sendScreenShare('start');
+      setScreenSharerId(selfIdRef.current);
+      screenSharerIdRef.current = selfIdRef.current;
+      setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, isScreenSharer: true } : u)));
+    } catch (err) {
+      logger.error('Screen', 'getDisplayMedia failed', { err });
+    }
+  }, [renegotiatePeer, stopScreenShareInternal]);
+
+  const toggleScreenShare = useCallback(() => {
+    if (screenSharerIdRef.current === selfIdRef.current && screenStreamRef.current) {
+      stopScreenShareInternal();
+    } else {
+      startScreenShare();
+    }
+  }, [selfIdRef.current, startScreenShare, stopScreenShareInternal]);
+
+  const toggleHand = useCallback(() => {
+    const next = !selfHandRaised;
+    setSelfHandRaised(next);
+    clientRef.current?.sendHand(next);
+    setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, handRaised: next } : u)));
+  }, [selfHandRaised]);
+
   const joinLobby = useCallback(
     async (id: string) => {
       if (!clientRef.current) return;
       cleanupAll();
       await ensureLocalAudio().catch(() => {});
       ensureAudioContext();
+      setLocalMuteState(true);
+      setSelfHandRaised(false);
       const me = selfIdRef.current;
       if (me && localStreamRef.current && audioCtxRef.current && !analyserRef.current.has(me)) {
         const source = audioCtxRef.current.createMediaStreamSource(localStreamRef.current);
@@ -332,14 +583,17 @@ function App() {
       setStatus('in-lobby');
       clientRef.current.joinLobby(id);
     },
-    [cleanupAll, ensureLocalAudio, ensureAudioContext, setStatus]
+    [cleanupAll, ensureLocalAudio, ensureAudioContext, setStatus, setLocalMuteState]
   );
 
   const leaveLobby = useCallback(() => {
     clientRef.current?.leaveLobby();
+    stopScreenShareInternal();
+    setLocalMuteState(true);
+    setSelfHandRaised(false);
     cleanupAll();
     setStatus('idle');
-  }, [cleanupAll, setStatus]);
+  }, [cleanupAll, setStatus, setLocalMuteState, stopScreenShareInternal]);
 
   const handleVolume = useCallback(
     (peerId: string, value: number) => {
@@ -351,16 +605,22 @@ function App() {
     []
   );
 
-  const toggleMute = useCallback(() => {
-    const next = !selfMuted;
-    setSelfMuted(next);
-    const stream = localStreamRef.current;
-    if (stream) {
-      stream.getAudioTracks().forEach((t) => (t.enabled = !next));
-    }
-    clientRef.current?.sendStatus(next);
-    setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, muted: next } : u)));
-  }, [selfMuted]);
+  const openScreenOverlay = useCallback(
+    (peerId: string) => {
+      overlayIntentRef.current = peerId;
+      setScreenOverlayPeerId(peerId);
+      setScreenOverlayOpen(true);
+      setScreenOverlayLoading(true);
+      const stream = screenStreamsRef.current.get(peerId);
+      if (stream) {
+        attachScreen(peerId, stream);
+      } else {
+        const pc = pcsRef.current.get(peerId);
+        if (pc) renegotiatePeer(peerId, pc);
+      }
+    },
+    [attachScreen, renegotiatePeer]
+  );
 
   useEffect(() => {
     const client = new ChatClient(WS_URL);
@@ -376,10 +636,14 @@ function App() {
     const unsubLobbyState = client.on('lobbyState', async ({ lobbyId: lid, users: us }) => {
       setLobbyId(lid);
       setUsers(us);
+      const sharer = us.find((u) => u.isScreenSharer)?.id ?? null;
+      setScreenSharerId(sharer);
+      screenSharerIdRef.current = sharer;
       const meId = selfIdRef.current;
       if (!meId) return;
       const me = us.find((u) => u.id === meId);
       setSelfMuted(!!me?.muted);
+      setSelfHandRaised(!!me?.handRaised);
       if (localStreamRef.current) {
         ensureAudioContext();
       }
@@ -419,6 +683,29 @@ function App() {
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, muted } : u)));
       if (userId === selfIdRef.current) setSelfMuted(muted);
     });
+    const unsubScreenSharer = client.on('screenSharer', ({ userId }) => {
+      screenSharerIdRef.current = userId;
+      setScreenSharerId(userId);
+      setUsers((prev) => prev.map((u) => ({ ...u, isScreenSharer: u.id === userId })));
+      if (userId === null) {
+        setScreenOverlayOpen(false);
+        setScreenOverlayPeerId(null);
+        setScreenOverlayLoading(false);
+        overlayIntentRef.current = null;
+        if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
+      } else if (userId !== selfIdRef.current) {
+        overlayIntentRef.current = userId;
+        const stream = screenStreamsRef.current.get(userId);
+        if (stream && screenOverlayVideoRef.current) {
+          screenOverlayVideoRef.current.srcObject = stream;
+        }
+        // не авто-открываем окно — ждём ручного клика “Смотреть”
+      }
+    });
+    const unsubHand = client.on('hand', ({ userId, raised }) => {
+      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, handRaised: raised } : u)));
+      if (userId === selfIdRef.current) setSelfHandRaised(raised);
+    });
     const unsubOpen = client.on('open', () => {
       setIsWsReady(true);
       client.sendDevice(deviceIdRef.current);
@@ -426,6 +713,9 @@ function App() {
     });
     const unsubClose = client.on('close', () => {
       setIsWsReady(false);
+      stopScreenShareInternal();
+      setLocalMuteState(true);
+      setSelfHandRaised(false);
       cleanupAll();
     });
     const unsubError = client.on('error', (msg) => setError(msg));
@@ -437,6 +727,8 @@ function App() {
       unsubLobbyState();
       unsubSignal();
       unsubStatus();
+      unsubScreenSharer();
+      unsubHand();
       unsubOpen();
       unsubClose();
       unsubError();
@@ -444,7 +736,7 @@ function App() {
       logger.setClient(null);
       client.disconnect();
     };
-  }, [cleanupAll, cleanupPeer, createPeerConnection, handleSignal, pushLog, setError, setStatus]);
+  }, [cleanupAll, cleanupPeer, createPeerConnection, handleSignal, pushLog, setError, setStatus, attachScreen, renegotiatePeer]);
 
   return (
     <div className="page audio">
@@ -472,19 +764,33 @@ function App() {
                 selfId={selfId}
                 active={active}
                 volumes={volumes}
-              onVolume={handleVolume}
+                onVolume={handleVolume}
+                onOpenScreen={openScreenOverlay}
               />
               <div className="room-controls">
                 <div className="control-pill">
                   <button
-                    className="pill-btn"
+                    className={`pill-btn ${selfMuted ? 'off' : 'on'}`}
                     onClick={toggleMute}
                     aria-label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
                   >
-                    <span className={`pill-icon ${selfMuted ? 'muted' : ''}`}>{selfMuted ? '🔇' : '🎤'}</span>
+                    <span className="pill-icon">🎤</span>
                   </button>
-                  <button className="pill-btn" aria-label="Демонстрация экрана">
+                  <button
+                  className={`pill-btn ${screenSharerId === selfId ? 'on' : 'off'}`}
+                    aria-label="Демонстрация экрана"
+                    onClick={toggleScreenShare}
+                    title={screenSharerId === selfId ? 'Остановить демонстрацию' : 'Начать демонстрацию'}
+                  disabled={screenSharerId !== null && screenSharerId !== selfId}
+                  >
                     <span className="pill-icon">🖥️</span>
+                  </button>
+                  <button
+                    className={`pill-btn ${selfHandRaised ? 'on' : 'off'}`}
+                    aria-label={selfHandRaised ? 'Опустить руку' : 'Поднять руку'}
+                    onClick={toggleHand}
+                  >
+                    <span className="pill-icon">✋</span>
                   </button>
                 </div>
               </div>
@@ -494,6 +800,26 @@ function App() {
           )}
         </div>
       </div>
+      {screenOverlayPeerId && (
+        <div className={`screen-overlay ${screenOverlayOpen ? 'open' : 'hidden'}`}>
+          <div className="screen-overlay-bar">
+            <span>Демонстрация: {users.find((u) => u.id === screenOverlayPeerId)?.displayName ?? 'экран'}</span>
+            <button
+              className="screen-overlay-close"
+              onClick={() => {
+                setScreenOverlayOpen(false);
+                setScreenOverlayLoading(false);
+                overlayIntentRef.current = null;
+                if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
+              }}
+            >
+              Закрыть
+        </button>
+          </div>
+          {screenOverlayLoading && <div className="loading">Загрузка экрана...</div>}
+          <video ref={screenOverlayVideoRef} autoPlay playsInline muted />
+        </div>
+      )}
       {lastError && <div className="error">Error: {lastError}</div>}
       </div>
   );

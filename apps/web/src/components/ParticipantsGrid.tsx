@@ -6,9 +6,10 @@ type Props = {
   active: Set<string>;
   volumes: Record<string, number>;
   onVolume: (peerId: string, value: number) => void;
+  onOpenScreen: (peerId: string) => void;
 };
 
-export function ParticipantsGrid({ users, selfId, active, volumes, onVolume }: Props) {
+export function ParticipantsGrid({ users, selfId, active, volumes, onVolume, onOpenScreen }: Props) {
   if (!users.length) {
     return <div className="participants placeholder">No one here yet</div>;
   }
@@ -18,9 +19,17 @@ export function ParticipantsGrid({ users, selfId, active, volumes, onVolume }: P
       {users.map((u) => (
         <div
           key={u.id}
-          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''} ${u.muted ? 'muted' : ''}`}
+          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''} ${u.muted ? 'muted' : ''} ${
+            u.handRaised ? 'hand-up' : 'hand-down'
+          }`}
         >
           {u.muted && <span className="mic-icon">🔇</span>}
+          {u.handRaised && <span className="hand-chip">✋</span>}
+          {u.isScreenSharer && u.id !== selfId && (
+            <button className="screen-chip" onClick={() => onOpenScreen(u.id)} title="Открыть трансляцию экрана">
+              🖥️ Смотреть
+            </button>
+          )}
           <div className="avatar">{u.displayName.slice(0, 2).toUpperCase()}</div>
           <div className="name">{u.displayName}</div>
           {u.id !== selfId && (
