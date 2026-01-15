@@ -9,6 +9,7 @@ import { logger } from './utils/logger';
 import { ICE_SERVERS, SCREEN_CONSTRAINTS_60 } from './webrtc/config';
 import { ensureLocalAudio } from './webrtc/media';
 import { createRenegotiator } from './webrtc/renegotiation';
+import { attachScreen as attachScreenHelper, waitForScreenStream as waitForScreenStreamHelper } from './webrtc/screenShare';
 
 type SignalPayload = {
   sdp?: RTCSessionDescriptionInit;
@@ -172,54 +173,21 @@ function App() {
   }, []);
 
   const attachScreen = useCallback(
-    (peerId: string, stream: MediaStream, attempt = 0) => {
-      logger.info('Screen', 'attachScreen', {
-        peerId,
-        streamId: stream.id,
-        tracks: stream.getTracks().map((t) => ({ id: t.id, kind: t.kind, readyState: t.readyState })),
-        attempt
-      });
-      const videoEl = screenOverlayVideoRef.current;
-      if (!videoEl) {
-        if (attempt > 3) {
-          logger.warn('Screen', 'attachScreen: video element not ready', { peerId });
-          return;
-        }
-        requestAnimationFrame(() => attachScreen(peerId, stream, attempt + 1));
-        return;
-      }
-      setScreenOverlayPeerId(peerId);
-      setScreenOverlayOpen(true);
-      setScreenOverlayLoading(true);
-      videoEl.srcObject = stream;
-      videoEl.muted = true;
-      const onReady = () => setScreenOverlayLoading(false);
-      videoEl.onloadeddata = onReady;
-      videoEl.oncanplay = onReady;
-      videoEl.onplaying = onReady;
-      // иногда помогает принудительное обновление размеров для рендера
-      videoEl.style.display = 'none';
-      videoEl.load();
-      videoEl.play().catch(() => {});
-      requestAnimationFrame(() => {
-        videoEl.style.display = 'block';
-      });
-    },
+    (peerId: string, stream: MediaStream) =>
+      attachScreenHelper(peerId, stream, {
+        videoRef: screenOverlayVideoRef,
+        setOverlayOpen: setScreenOverlayOpen,
+        setOverlayPeerId: setScreenOverlayPeerId,
+        setOverlayLoading: setScreenOverlayLoading,
+        logger
+      }),
     []
   );
 
   const waitForScreenStream = useCallback(
-    async (peerId: string, timeoutMs = 3000): Promise<MediaStream | null> => {
-      const started = performance.now();
-      while (performance.now() - started < timeoutMs) {
-        const stream = screenStreamsRef.current.get(peerId);
-        if (stream) return stream;
-        await new Promise((res) => setTimeout(res, 150));
-      }
-      logger.warn('Screen', 'waitForScreenStream timeout', { peerId, timeoutMs });
-      return null;
-    },
-    []
+    (peerId: string, timeoutMs = 3000) =>
+      waitForScreenStreamHelper(peerId, screenStreamsRef, logger, timeoutMs),
+    [logger]
   );
 
   const markScreenReady = useCallback((peerId: string) => {
@@ -527,9 +495,13 @@ function App() {
         const params = sender.getParameters();
         params.encodings = params.encodings?.length ? params.encodings : [{}];
         params.encodings.forEach((enc) => {
-          enc.maxBitrate = 4_000_000;
+          enc.maxBitrate = 8_000_000;
           enc.maxFramerate = 60;
           enc.scaleResolutionDownBy = 1;
+          // пробуем многослойность, если поддерживается (VP9/AV1)
+          if (!(enc as any).scalabilityMode) {
+            (enc as any).scalabilityMode = 'L3T3_KEY';
+          }
         });
         (params as any).degradationPreference = 'maintain-framerate';
         sender.setParameters(params).catch(() => {});
