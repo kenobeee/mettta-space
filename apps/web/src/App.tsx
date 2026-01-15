@@ -6,6 +6,7 @@ import { useChatStore } from './store/useChatStore';
 import { ChatClient } from '@chat/shared';
 import type { LobbyInfo, LobbyUser } from '@chat/shared';
 import { logger } from './utils/logger';
+import { ICE_SERVERS, SCREEN_CONSTRAINTS_60, AUDIO_CONSTRAINTS, FALLBACK_AUDIO_CONSTRAINTS } from './webrtc/config';
 
 type SignalPayload = {
   sdp?: RTCSessionDescriptionInit;
@@ -20,30 +21,6 @@ const WS_URL =
     : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
-
-const ICE_SERVERS: RTCIceServer[] = (() => {
-  const urlsEnv = (import.meta.env.VITE_TURN_URL ?? '')
-    .split(',')
-    .map((s: string) => s.trim())
-    .filter((s: string): s is string => Boolean(s));
-
-  const defaultStun = ['stun:mettta.space:3478'];
-  const defaultTurn = ['turn:mettta.space:3478?transport=udp'];
-
-  const stunUrls = urlsEnv.filter((u: string) => u.startsWith('stun:'));
-  const turnUrls = urlsEnv.filter((u: string) => u.startsWith('turn:'));
-
-  const servers: RTCIceServer[] = [
-    { urls: stunUrls.length ? stunUrls : defaultStun },
-    {
-      urls: turnUrls.length ? turnUrls : defaultTurn,
-      username: import.meta.env.VITE_TURN_USERNAME ?? 'mira',
-      credential: import.meta.env.VITE_TURN_PASSWORD ?? 'mira_turn_secret'
-    }
-  ];
-
-  return servers;
-})();
 
 function App() {
   const { lastError, setStatus, setError, reset, pushLog } = useChatStore();
@@ -96,29 +73,15 @@ function App() {
 
   const ensureLocalAudio = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
-
-    const primaryConstraints: MediaStreamConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-        channelCount: 1,
-        sampleRate: 48000
-      },
-      video: false
-    };
-
-    const fallbackConstraints: MediaStreamConstraints = { audio: true, video: false };
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(primaryConstraints);
+      const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS);
       localStreamRef.current = stream;
       const track = stream.getAudioTracks()[0];
       if (track?.contentHint === '') track.contentHint = 'speech';
       return stream;
     } catch (err) {
       logger.error('WebRTC', 'getUserMedia failed with tuned constraints, retrying with defaults', { err });
-      const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+      const stream = await navigator.mediaDevices.getUserMedia(FALLBACK_AUDIO_CONSTRAINTS);
       localStreamRef.current = stream;
       return stream;
     }
@@ -324,12 +287,16 @@ function App() {
             peerId,
             state: pc.signalingState
           });
+          scheduleRenegotiate(peerId, pc);
           return;
         }
         await pc.setLocalDescription(await pc.createOffer());
         clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
       } catch (err) {
         logger.error('WebRTC', 'Renegotiation failed', { peerId, err });
+        if ((err as any)?.name === 'InvalidStateError' || pc.signalingState !== 'stable') {
+          scheduleRenegotiate(peerId, pc);
+        }
       } finally {
         makingOfferRef.current.set(peerId, false);
       }
@@ -359,6 +326,12 @@ function App() {
           }
         };
         pc.addEventListener('signalingstatechange', handler);
+        setTimeout(() => {
+          if (pc.signalingState === 'stable' && pendingRenegotiateRef.current.get(peerId)) {
+            pc.removeEventListener('signalingstatechange', handler);
+            run();
+          }
+        }, 1500);
       }
     },
     [renegotiatePeer]
@@ -621,14 +594,7 @@ function App() {
   const startScreenShare = useCallback(async () => {
     if (screenStreamRef.current) return;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          frameRate: { ideal: 60, max: 60 },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
+      const stream = await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS_60);
       const track = stream.getVideoTracks()[0];
       if (!track) return;
       if (track.contentHint !== 'detail') {
@@ -651,8 +617,10 @@ function App() {
         params.encodings = params.encodings?.length ? params.encodings : [{}];
         params.encodings.forEach((enc) => {
           enc.maxBitrate = 4_000_000;
+          enc.maxFramerate = 60;
           enc.scaleResolutionDownBy = 1;
         });
+        (params as any).degradationPreference = 'maintain-framerate';
         sender.setParameters(params).catch(() => {});
         sender.replaceTrack(track).catch(() => {});
         tr.direction = 'sendrecv';
