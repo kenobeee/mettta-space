@@ -2,7 +2,7 @@ import { createServer } from 'http';
 import { randomUUID } from 'crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { ClientMessage, LobbyInfo, LobbyUser, ServerMessage } from '@chat/shared';
-import { logger, writeClientLog } from './logger';
+import { writeClientLog } from './logger';
 
 type TrackedSocket = WebSocket & { isAlive?: boolean };
 
@@ -373,7 +373,6 @@ wss.on('connection', (socket: TrackedSocket) => {
   socket.on('message', (raw) => handleMessage(clientId, raw));
 
   socket.on('close', (code, reason) => {
-    logger.warn('Connection', `Client disconnected`, { clientId, code, reason: reason.toString() });
     leaveCurrentLobby(clientId);
     sockets.delete(clientId);
     displayNames.delete(clientId);
@@ -383,7 +382,7 @@ wss.on('connection', (socket: TrackedSocket) => {
   });
 
   socket.on('error', (err) => {
-    logger.error('Connection', `Client error`, { clientId, error: err.message, stack: err.stack });
+    // suppress server-side logging
   });
 });
 
@@ -406,6 +405,6 @@ wss.on('close', () => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`WebSocket server listening on ws://localhost:${PORT}`);
+  // logging disabled
 });
 
