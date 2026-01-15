@@ -20,11 +20,8 @@ export function ParticipantsGrid({ users, selfId, active, volumes, screenReady, 
       {users.map((u) => (
         <div
           key={u.id}
-          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''} ${u.muted ? 'muted' : ''} ${
-            u.handRaised ? 'hand-up' : 'hand-down'
-          }`}
+          className={`participant ${u.id === selfId ? 'me' : ''} ${active.has(u.id) ? 'active' : ''} ${u.handRaised ? 'hand-up' : ''}`}
         >
-          {u.muted && <span className="mic-icon">🔇</span>}
           {u.handRaised && <span className="hand-chip">✋</span>}
           {u.isScreenSharer && u.id !== selfId && (
             <button
@@ -40,7 +37,6 @@ export function ParticipantsGrid({ users, selfId, active, volumes, screenReady, 
           <div className="name">{u.displayName}</div>
           {u.id !== selfId && (
             <div className="volume">
-              <span className="volume-icon">🔊</span>
               <input
                 type="range"
                 min={0}
