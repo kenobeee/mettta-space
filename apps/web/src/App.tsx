@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { LobbyList } from './components/LobbyList';
 import { ParticipantsGrid } from './components/ParticipantsGrid';
@@ -6,7 +6,9 @@ import { useChatStore } from './store/useChatStore';
 import { ChatClient } from '@chat/shared';
 import type { LobbyInfo, LobbyUser } from '@chat/shared';
 import { logger } from './utils/logger';
-import { ICE_SERVERS, SCREEN_CONSTRAINTS_60, AUDIO_CONSTRAINTS, FALLBACK_AUDIO_CONSTRAINTS } from './webrtc/config';
+import { ICE_SERVERS, SCREEN_CONSTRAINTS_60 } from './webrtc/config';
+import { ensureLocalAudio } from './webrtc/media';
+import { createRenegotiator } from './webrtc/renegotiation';
 
 type SignalPayload = {
   sdp?: RTCSessionDescriptionInit;
@@ -71,21 +73,7 @@ function App() {
     return id;
   })());
 
-  const ensureLocalAudio = useCallback(async () => {
-    if (localStreamRef.current) return localStreamRef.current;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS);
-      localStreamRef.current = stream;
-      const track = stream.getAudioTracks()[0];
-      if (track?.contentHint === '') track.contentHint = 'speech';
-      return stream;
-    } catch (err) {
-      logger.error('WebRTC', 'getUserMedia failed with tuned constraints, retrying with defaults', { err });
-      const stream = await navigator.mediaDevices.getUserMedia(FALLBACK_AUDIO_CONSTRAINTS);
-      localStreamRef.current = stream;
-      return stream;
-    }
-  }, []);
+  const ensureLocalAudioRef = useCallback(async () => ensureLocalAudio(localStreamRef, logger), []);
 
   const cleanupPeer = useCallback((peerId: string) => {
     const pc = pcsRef.current.get(peerId);
@@ -249,92 +237,15 @@ function App() {
     }
   }, []);
 
-  const waitForStable = useCallback((pc: RTCPeerConnection, peerId: string, timeoutMs = 2000) => {
-    if (pc.signalingState === 'stable') return Promise.resolve(true);
-    return new Promise<boolean>((resolve) => {
-      let done = false;
-      const onChange = () => {
-        if (done) return;
-        if (pc.signalingState === 'stable') {
-          done = true;
-          pc.removeEventListener('signalingstatechange', onChange);
-          resolve(true);
-        } else if (pc.signalingState === 'closed') {
-          done = true;
-          pc.removeEventListener('signalingstatechange', onChange);
-          resolve(false);
-        }
-      };
-      pc.addEventListener('signalingstatechange', onChange);
-      setTimeout(() => {
-        if (done) return;
-        done = true;
-        pc.removeEventListener('signalingstatechange', onChange);
-        logger.warn('WebRTC', 'waitForStable timeout', { peerId, state: pc.signalingState });
-        resolve(pc.signalingState === 'stable');
-      }, timeoutMs);
-    });
-  }, []);
-
-  const renegotiatePeer = useCallback(
-    async (peerId: string, pc: RTCPeerConnection) => {
-      if (makingOfferRef.current.get(peerId)) return;
-      makingOfferRef.current.set(peerId, true);
-      try {
-        const stable = await waitForStable(pc, peerId);
-        if (!stable || pc.signalingState !== 'stable') {
-          logger.warn('WebRTC', 'Skip renegotiation: signaling not stable', {
-            peerId,
-            state: pc.signalingState
-          });
-          scheduleRenegotiate(peerId, pc);
-          return;
-        }
-        await pc.setLocalDescription(await pc.createOffer());
-        clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
-      } catch (err) {
-        logger.error('WebRTC', 'Renegotiation failed', { peerId, err });
-        if ((err as any)?.name === 'InvalidStateError' || pc.signalingState !== 'stable') {
-          scheduleRenegotiate(peerId, pc);
-        }
-      } finally {
-        makingOfferRef.current.set(peerId, false);
-      }
-    },
-    [waitForStable]
-  );
-
-  const scheduleRenegotiate = useCallback(
-    (peerId: string, pc: RTCPeerConnection) => {
-      if (pc.signalingState === 'closed') return;
-      if (pendingRenegotiateRef.current.get(peerId)) {
-        return;
-      }
-      pendingRenegotiateRef.current.set(peerId, true);
-      const run = async () => {
-        pendingRenegotiateRef.current.delete(peerId);
-        if (pc.signalingState === 'closed') return;
-        await renegotiatePeer(peerId, pc);
-      };
-      if (pc.signalingState === 'stable') {
-        run();
-      } else {
-        const handler = () => {
-          if (pc.signalingState === 'stable' || pc.signalingState === 'closed') {
-            pc.removeEventListener('signalingstatechange', handler);
-            run();
-          }
-        };
-        pc.addEventListener('signalingstatechange', handler);
-        setTimeout(() => {
-          if (pc.signalingState === 'stable' && pendingRenegotiateRef.current.get(peerId)) {
-            pc.removeEventListener('signalingstatechange', handler);
-            run();
-          }
-        }, 1500);
-      }
-    },
-    [renegotiatePeer]
+  const { renegotiatePeer, scheduleRenegotiate } = useMemo(
+    () =>
+      createRenegotiator({
+        clientRef,
+        makingOfferRef,
+        pendingRenegotiateRef,
+        logger
+      }),
+    []
   );
 
   const createPeerConnection = useCallback(
@@ -372,7 +283,7 @@ function App() {
         }
       }
 
-      const local = await ensureLocalAudio();
+      const local = await ensureLocalAudioRef();
       local.getTracks().forEach((t) => {
         const sender = pc.addTrack(t, local);
         if (t.kind === 'audio') {
@@ -492,7 +403,7 @@ function App() {
 
       return pc;
     },
-    [cleanupPeer, ensureLocalAudio, scheduleRenegotiate]
+    [cleanupPeer, ensureLocalAudioRef, scheduleRenegotiate]
   );
 
   const handleSignal = useCallback(
@@ -658,7 +569,7 @@ function App() {
     async (id: string) => {
       if (!clientRef.current) return;
       cleanupAll();
-      await ensureLocalAudio().catch(() => {});
+      await ensureLocalAudioRef().catch(() => {});
       ensureAudioContext();
       setLocalMuteState(true);
       setSelfHandRaised(false);
@@ -675,7 +586,7 @@ function App() {
       setStatus('in-lobby');
       clientRef.current.joinLobby(id);
     },
-    [cleanupAll, ensureLocalAudio, ensureAudioContext, setStatus, setLocalMuteState]
+    [cleanupAll, ensureLocalAudioRef, ensureAudioContext, setStatus, setLocalMuteState]
   );
 
   const leaveLobby = useCallback(() => {
