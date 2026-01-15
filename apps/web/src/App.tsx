@@ -57,11 +57,12 @@ function App() {
   const ignoreOfferRef = useRef<Map<string, boolean>>(new Map());
   const settingRemoteAnswerRef = useRef<Map<string, boolean>>(new Map());
   const pendingRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const pendingRenegotiateRef = useRef<Map<string, boolean>>(new Map());
   const remoteAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<Map<string, AnalyserNode>>(new Map());
   const rafRef = useRef<number | null>(null);
-  const overlayIntentRef = useRef<string | null>(null);
+  const screenReadyRef = useRef<Record<string, boolean>>({});
   const [active, setActive] = useState<Set<string>>(new Set());
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const volumesRef = useRef<Map<string, number>>(new Map());
@@ -82,6 +83,7 @@ function App() {
   const screenOverlayVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const [screenOverlayLoading, setScreenOverlayLoading] = useState(false);
+  const [screenReady, setScreenReady] = useState<Record<string, boolean>>({});
 
   const deviceIdRef = useRef<string>((() => {
     const key = 'mira_device_id';
@@ -170,10 +172,11 @@ function App() {
     setScreenOverlayOpen(false);
     setScreenOverlayPeerId(null);
     setScreenOverlayLoading(false);
-    overlayIntentRef.current = null;
     if (screenOverlayVideoRef.current) {
       screenOverlayVideoRef.current.srcObject = null;
     }
+    screenReadyRef.current = {};
+    setScreenReady({});
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
@@ -217,20 +220,60 @@ function App() {
     }
   }, []);
 
-  const attachScreen = useCallback((peerId: string, stream: MediaStream) => {
-    setScreenOverlayPeerId(peerId);
-    setScreenOverlayOpen(true);
-    setScreenOverlayLoading(true);
-    const videoEl = screenOverlayVideoRef.current;
-    if (videoEl) {
+  const attachScreen = useCallback(
+    (peerId: string, stream: MediaStream, attempt = 0) => {
+      logger.info('Screen', 'attachScreen', {
+        peerId,
+        streamId: stream.id,
+        tracks: stream.getTracks().map((t) => ({ id: t.id, kind: t.kind, readyState: t.readyState })),
+        attempt
+      });
+      const videoEl = screenOverlayVideoRef.current;
+      if (!videoEl) {
+        if (attempt > 3) {
+          logger.warn('Screen', 'attachScreen: video element not ready', { peerId });
+          return;
+        }
+        requestAnimationFrame(() => attachScreen(peerId, stream, attempt + 1));
+        return;
+      }
+      setScreenOverlayPeerId(peerId);
+      setScreenOverlayOpen(true);
+      setScreenOverlayLoading(true);
       videoEl.srcObject = stream;
       videoEl.muted = true;
       const onReady = () => setScreenOverlayLoading(false);
       videoEl.onloadeddata = onReady;
+      videoEl.oncanplay = onReady;
       videoEl.onplaying = onReady;
+      // иногда помогает принудительное обновление размеров для рендера
+      videoEl.style.display = 'none';
+      videoEl.load();
       videoEl.play().catch(() => {});
-    }
-    overlayIntentRef.current = null;
+      requestAnimationFrame(() => {
+        videoEl.style.display = 'block';
+      });
+    },
+    []
+  );
+
+  const waitForScreenStream = useCallback(
+    async (peerId: string, timeoutMs = 3000): Promise<MediaStream | null> => {
+      const started = performance.now();
+      while (performance.now() - started < timeoutMs) {
+        const stream = screenStreamsRef.current.get(peerId);
+        if (stream) return stream;
+        await new Promise((res) => setTimeout(res, 150));
+      }
+      logger.warn('Screen', 'waitForScreenStream timeout', { peerId, timeoutMs });
+      return null;
+    },
+    []
+  );
+
+  const markScreenReady = useCallback((peerId: string) => {
+    screenReadyRef.current[peerId] = true;
+    setScreenReady((prev) => ({ ...prev, [peerId]: true }));
   }, []);
 
   const flushPending = useCallback(async (peerId: string, pc: RTCPeerConnection) => {
@@ -243,11 +286,46 @@ function App() {
     }
   }, []);
 
+  const waitForStable = useCallback((pc: RTCPeerConnection, peerId: string, timeoutMs = 2000) => {
+    if (pc.signalingState === 'stable') return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const onChange = () => {
+        if (done) return;
+        if (pc.signalingState === 'stable') {
+          done = true;
+          pc.removeEventListener('signalingstatechange', onChange);
+          resolve(true);
+        } else if (pc.signalingState === 'closed') {
+          done = true;
+          pc.removeEventListener('signalingstatechange', onChange);
+          resolve(false);
+        }
+      };
+      pc.addEventListener('signalingstatechange', onChange);
+      setTimeout(() => {
+        if (done) return;
+        done = true;
+        pc.removeEventListener('signalingstatechange', onChange);
+        logger.warn('WebRTC', 'waitForStable timeout', { peerId, state: pc.signalingState });
+        resolve(pc.signalingState === 'stable');
+      }, timeoutMs);
+    });
+  }, []);
+
   const renegotiatePeer = useCallback(
     async (peerId: string, pc: RTCPeerConnection) => {
       if (makingOfferRef.current.get(peerId)) return;
       makingOfferRef.current.set(peerId, true);
       try {
+        const stable = await waitForStable(pc, peerId);
+        if (!stable || pc.signalingState !== 'stable') {
+          logger.warn('WebRTC', 'Skip renegotiation: signaling not stable', {
+            peerId,
+            state: pc.signalingState
+          });
+          return;
+        }
         await pc.setLocalDescription(await pc.createOffer());
         clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
       } catch (err) {
@@ -256,7 +334,34 @@ function App() {
         makingOfferRef.current.set(peerId, false);
       }
     },
-    []
+    [waitForStable]
+  );
+
+  const scheduleRenegotiate = useCallback(
+    (peerId: string, pc: RTCPeerConnection) => {
+      if (pc.signalingState === 'closed') return;
+      if (pendingRenegotiateRef.current.get(peerId)) {
+        return;
+      }
+      pendingRenegotiateRef.current.set(peerId, true);
+      const run = async () => {
+        pendingRenegotiateRef.current.delete(peerId);
+        if (pc.signalingState === 'closed') return;
+        await renegotiatePeer(peerId, pc);
+      };
+      if (pc.signalingState === 'stable') {
+        run();
+      } else {
+        const handler = () => {
+          if (pc.signalingState === 'stable' || pc.signalingState === 'closed') {
+            pc.removeEventListener('signalingstatechange', handler);
+            run();
+          }
+        };
+        pc.addEventListener('signalingstatechange', handler);
+      }
+    },
+    [renegotiatePeer]
   );
 
   const createPeerConnection = useCallback(
@@ -272,7 +377,7 @@ function App() {
       pcsRef.current.set(peerId, pc);
       pendingRef.current.set(peerId, []);
 
-      const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
       // Prefer VP8 for compatibility (Windows/Safari) and screen content
       const capabilities = RTCRtpSender.getCapabilities('video');
       if (capabilities?.codecs) {
@@ -329,6 +434,13 @@ function App() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0] ?? new MediaStream([event.track]);
+        logger.info('WebRTC', 'ontrack', {
+          peerId,
+          kind: event.track.kind,
+          trackId: event.track.id,
+          streamId: stream.id,
+          readyState: event.track.readyState
+        });
         if (event.track.kind === 'audio') {
           let audio = remoteAudioRef.current.get(peerId);
           if (!audio) {
@@ -356,30 +468,36 @@ function App() {
 
         if (event.track.kind === 'video') {
           screenStreamsRef.current.set(peerId, stream);
-          const currentSharer = screenSharerIdRef.current;
-          const wanted = overlayIntentRef.current ?? currentSharer;
+          markScreenReady(peerId);
           const videoEl = screenOverlayVideoRef.current;
           if (videoEl && screenOverlayPeerId === peerId) {
             videoEl.srcObject = stream;
             videoEl.play().catch(() => {});
           }
-          if (wanted === peerId) {
-            attachScreen(peerId, stream);
-          }
           event.track.onunmute = () => {
+            logger.info('WebRTC', 'video track onunmute', {
+              peerId,
+              trackId: event.track.id,
+              readyState: event.track.readyState
+            });
+            markScreenReady(peerId);
             const videoEl = screenOverlayVideoRef.current;
             if (videoEl && screenOverlayPeerId === peerId) {
               videoEl.srcObject = stream;
               videoEl.play().catch(() => {});
               setScreenOverlayLoading(false);
-            } else if (overlayIntentRef.current === peerId) {
-              attachScreen(peerId, stream);
             }
           };
           event.track.onended = () => {
             const v = screenStreamsRef.current.get(peerId);
             if (v) v.getTracks().forEach((t) => t.stop());
             screenStreamsRef.current.delete(peerId);
+            setScreenReady((prev) => {
+              const next = { ...prev };
+              delete next[peerId];
+              return next;
+            });
+            delete screenReadyRef.current[peerId];
             if (screenOverlayPeerId === peerId) {
               setScreenOverlayOpen(false);
               setScreenOverlayPeerId(null);
@@ -396,12 +514,12 @@ function App() {
       }
 
       pc.onnegotiationneeded = async () => {
-        await renegotiatePeer(peerId, pc);
+        scheduleRenegotiate(peerId, pc);
       };
 
       return pc;
     },
-    [cleanupPeer, ensureLocalAudio]
+    [cleanupPeer, ensureLocalAudio, scheduleRenegotiate]
   );
 
   const handleSignal = useCallback(
@@ -492,7 +610,7 @@ function App() {
       tr.direction = 'recvonly';
     });
     pcsRef.current.forEach((pc, peerId) => {
-      renegotiatePeer(peerId, pc);
+      scheduleRenegotiate(peerId, pc);
     });
     clientRef.current?.sendScreenShare('stop');
     setScreenSharerId(null);
@@ -516,8 +634,14 @@ function App() {
       if (track.contentHint !== 'detail') {
         track.contentHint = 'detail';
       }
+      logger.info('Screen', 'local getDisplayMedia success', {
+        streamId: stream.id,
+        trackId: track.id,
+        settings: track.getSettings ? track.getSettings() : undefined
+      });
       screenStreamRef.current = stream;
       track.onended = () => {
+        logger.info('Screen', 'local track ended');
         stopScreenShareInternal();
       };
 
@@ -535,7 +659,7 @@ function App() {
       });
       // Гарантированная ренегоциация после подмены трека
       for (const [peerId, pc] of pcsRef.current.entries()) {
-        await renegotiatePeer(peerId, pc);
+        scheduleRenegotiate(peerId, pc);
       }
 
       clientRef.current?.sendScreenShare('start');
@@ -607,7 +731,10 @@ function App() {
 
   const openScreenOverlay = useCallback(
     (peerId: string) => {
-      overlayIntentRef.current = peerId;
+      logger.info('Screen', 'openScreenOverlay click', {
+        peerId,
+        hasStream: !!screenStreamsRef.current.get(peerId)
+      });
       setScreenOverlayPeerId(peerId);
       setScreenOverlayOpen(true);
       setScreenOverlayLoading(true);
@@ -616,10 +743,14 @@ function App() {
         attachScreen(peerId, stream);
       } else {
         const pc = pcsRef.current.get(peerId);
-        if (pc) renegotiatePeer(peerId, pc);
+        if (pc) scheduleRenegotiate(peerId, pc);
+        waitForScreenStream(peerId).then((s) => {
+          if (s) attachScreen(peerId, s);
+          else setScreenOverlayLoading(false);
+        });
       }
     },
-    [attachScreen, renegotiatePeer]
+    [attachScreen, renegotiatePeer, waitForScreenStream]
   );
 
   useEffect(() => {
@@ -688,17 +819,26 @@ function App() {
       setScreenSharerId(userId);
       setUsers((prev) => prev.map((u) => ({ ...u, isScreenSharer: u.id === userId })));
       if (userId === null) {
+        logger.info('Screen', 'screenSharer stopped');
         setScreenOverlayOpen(false);
         setScreenOverlayPeerId(null);
         setScreenOverlayLoading(false);
-        overlayIntentRef.current = null;
+        screenReadyRef.current = {};
+        setScreenReady({});
         if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
       } else if (userId !== selfIdRef.current) {
-        overlayIntentRef.current = userId;
+        logger.info('Screen', 'screenSharer started (remote)', { userId });
+        screenReadyRef.current[userId] = false;
+        setScreenReady((prev) => ({ ...prev, [userId]: false }));
         const stream = screenStreamsRef.current.get(userId);
         if (stream && screenOverlayVideoRef.current) {
           screenOverlayVideoRef.current.srcObject = stream;
+          screenOverlayVideoRef.current.play().catch(() => {});
         }
+        const pc = pcsRef.current.get(userId);
+        const tx = screenTransceiversRef.current.get(userId);
+        if (tx) tx.direction = 'recvonly';
+        if (pc) scheduleRenegotiate(userId, pc);
         // не авто-открываем окно — ждём ручного клика “Смотреть”
       }
     });
@@ -764,6 +904,7 @@ function App() {
                 selfId={selfId}
                 active={active}
                 volumes={volumes}
+                screenReady={screenReady}
                 onVolume={handleVolume}
                 onOpenScreen={openScreenOverlay}
               />
@@ -809,7 +950,6 @@ function App() {
               onClick={() => {
                 setScreenOverlayOpen(false);
                 setScreenOverlayLoading(false);
-                overlayIntentRef.current = null;
                 if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
               }}
             >

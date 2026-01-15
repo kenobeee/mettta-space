@@ -5,11 +5,12 @@ type Props = {
   selfId?: string;
   active: Set<string>;
   volumes: Record<string, number>;
+  screenReady: Record<string, boolean>;
   onVolume: (peerId: string, value: number) => void;
   onOpenScreen: (peerId: string) => void;
 };
 
-export function ParticipantsGrid({ users, selfId, active, volumes, onVolume, onOpenScreen }: Props) {
+export function ParticipantsGrid({ users, selfId, active, volumes, screenReady, onVolume, onOpenScreen }: Props) {
   if (!users.length) {
     return <div className="participants placeholder">No one here yet</div>;
   }
@@ -26,7 +27,12 @@ export function ParticipantsGrid({ users, selfId, active, volumes, onVolume, onO
           {u.muted && <span className="mic-icon">🔇</span>}
           {u.handRaised && <span className="hand-chip">✋</span>}
           {u.isScreenSharer && u.id !== selfId && (
-            <button className="screen-chip" onClick={() => onOpenScreen(u.id)} title="Открыть трансляцию экрана">
+            <button
+              className="screen-chip"
+              onClick={() => onOpenScreen(u.id)}
+              title={screenReady[u.id] ? 'Открыть трансляцию экрана' : 'Поток еще загружается'}
+              disabled={!screenReady[u.id]}
+            >
               🖥️ Смотреть
             </button>
           )}

@@ -23,7 +23,12 @@ export function LobbyList({ lobbies, lobbyId, isWsReady, onJoin, onLeave }: Prop
                 Выйти
               </button>
             ) : (
-              <button className="primary join" onClick={() => onJoin(lobby.id)} disabled={!isWsReady}>
+              <button
+                className="primary join"
+                onClick={() => onJoin(lobby.id)}
+                disabled={!isWsReady || !!lobbyId}
+                title={lobbyId ? 'Вы уже в лобби' : 'Войти'}
+              >
                 Войти
               </button>
             )}
