@@ -21,9 +21,20 @@ mkdir -p /var/www/mira/{frontend,backend}
 mkdir -p /var/www/mira/backend/src
 EOF
 
-# Собираем десктопные инсталляторы (локально)
-echo "💻 Собираем desktop инсталляторы локально (mac)..."
-npm run build:desktop
+# Флаг пропуска сборки/загрузки десктопа
+SKIP_DESKTOP=0
+for arg in "$@"; do
+  if [[ "$arg" == "--skip-desktop-build" ]]; then
+    SKIP_DESKTOP=1
+  fi
+done
+
+if [[ $SKIP_DESKTOP -eq 0 ]]; then
+  echo "💻 Собираем desktop инсталляторы локально (mac)..."
+  npm run build:desktop
+else
+  echo "⏭️  Пропускаем сборку desktop (флаг --skip-desktop-build)"
+fi
 
 # Копируем фронтенд
 echo "📦 Копируем фронтенд..."
@@ -178,14 +189,17 @@ systemctl enable coturn
 systemctl restart coturn
 EOF
 
-# Копируем desktop инсталляторы
-echo "💾 Копируем desktop инсталляторы..."
-sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER "mkdir -p $APP_DIR/frontend/downloads"
+if [[ $SKIP_DESKTOP -eq 0 ]]; then
+  echo "💾 Копируем desktop инсталляторы..."
+  sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER "mkdir -p $APP_DIR/frontend/downloads"
 
-MAC_INSTALLER=$(ls apps/desktop/dist/metttaspace-*.dmg 2>/dev/null | head -n 1)
+  MAC_INSTALLER=$(ls apps/desktop/dist/metttaspace-*.dmg 2>/dev/null | head -n 1)
 
-if [ -n "$MAC_INSTALLER" ]; then
-  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$MAC_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-mac.dmg
+  if [ -n "$MAC_INSTALLER" ]; then
+    sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$MAC_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-mac.dmg
+  fi
+else
+  echo "⏭️  Пропускаем загрузку desktop инсталляторов"
 fi
 
 echo "🎉 Деплой завершён!"

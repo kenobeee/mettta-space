@@ -35,10 +35,12 @@ export const AUDIO_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: false,
+    autoGainControl: true,
     channelCount: 1,
-    sampleRate: 48000
-  },
+    sampleRate: 48000,
+    // Safari/iOS поддерживает voiceIsolation; в остальных браузерах опция будет проигнорирована.
+    voiceIsolation: true
+  } as MediaTrackConstraints,
   video: false
 };
 
