@@ -499,6 +499,60 @@ button {
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
 }
 
+/* Mobile blocker */
+.mobile-blocker {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 120;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.mobile-blocker__card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 18px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  border: 1px solid #e5e7eb;
+}
+
+.mobile-blocker__title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.mobile-blocker__text {
+  color: #475569;
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+
+.mobile-blocker__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .mobile-blocker {
+    display: flex;
+  }
+  body {
+    overflow: hidden;
+  }
+}
+
 .screen-chip {
   position: absolute;
   top: 8px;

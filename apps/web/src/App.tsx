@@ -731,15 +731,25 @@ function App() {
 
   return (
     <div className="page audio">
+      <div className="mobile-blocker">
+        <div className="mobile-blocker__card">
+          <div className="mobile-blocker__title">Доступно только на десктопе</div>
+          <div className="mobile-blocker__text">
+            Пожалуйста, откройте mettta.space на компьютере или установите десктопное приложение.
+          </div>
+          <div className="mobile-blocker__actions">
+            <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
+              macOS
+            </a>
+          </div>
+        </div>
+      </div>
       {!isDesktopEnv && (
         <div className="top-banner">
           <div className="logo">mettta.space</div>
           <div className="downloads">
             <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
               macOS
-            </a>
-            <a href="https://mettta.space/downloads/metttaspace-linux.AppImage" className="dl-btn" download>
-              Linux
             </a>
           </div>
         </div>

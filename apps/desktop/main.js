@@ -88,9 +88,21 @@ app.whenReady().then(async () => {
   // Improve audio capture/processing permissions for desktop
   const ses = session.defaultSession;
   await ses.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media') return callback(true);
+    if (permission === 'media' || permission === 'display-capture') return callback(true);
     callback(false);
   });
+
+  if (ses.setDisplayMediaRequestHandler) {
+    ses.setDisplayMediaRequestHandler((request, callback) => {
+      // Allow full screen capture; audio false (мы не шлем системный звук)
+      callback({
+        video: {
+          mandatory: { chromeMediaSource: 'screen' }
+        },
+        audio: false
+      });
+    });
+  }
 
   createWindow();
 

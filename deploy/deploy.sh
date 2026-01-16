@@ -22,7 +22,7 @@ mkdir -p /var/www/mira/backend/src
 EOF
 
 # Собираем десктопные инсталляторы (локально)
-echo "💻 Собираем desktop инсталляторы локально (mac/win/linux)..."
+echo "💻 Собираем desktop инсталляторы локально (mac)..."
 npm run build:desktop
 
 # Копируем фронтенд
@@ -183,13 +183,9 @@ echo "💾 Копируем desktop инсталляторы..."
 sshpass -p 'Komarik_174' ssh -o StrictHostKeyChecking=no $SERVER "mkdir -p $APP_DIR/frontend/downloads"
 
 MAC_INSTALLER=$(ls apps/desktop/dist/metttaspace-*.dmg 2>/dev/null | head -n 1)
-LIN_INSTALLER=$(ls apps/desktop/dist/metttaspace-*-linux-*.AppImage 2>/dev/null | head -n 1)
 
 if [ -n "$MAC_INSTALLER" ]; then
   sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$MAC_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-mac.dmg
-fi
-if [ -n "$LIN_INSTALLER" ]; then
-  sshpass -p 'Komarik_174' scp -o StrictHostKeyChecking=no "$LIN_INSTALLER" $SERVER:$APP_DIR/frontend/downloads/metttaspace-linux.AppImage
 fi
 
 echo "🎉 Деплой завершён!"
