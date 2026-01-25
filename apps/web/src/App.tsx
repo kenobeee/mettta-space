@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { LobbyList } from './components/LobbyList';
 import { ParticipantsGrid } from './components/ParticipantsGrid';
+import { ChatPanel } from './components/ChatPanel';
 import { useChatStore } from './store/useChatStore';
 import { ChatClient } from '@chat/shared';
-import type { LobbyInfo, LobbyUser } from '@chat/shared';
+import type { ChatMessage, LobbyInfo, LobbyUser } from '@chat/shared';
 import { logger } from './utils/logger';
 import { ICE_SERVERS, SCREEN_CONSTRAINTS_60 } from './webrtc/config';
 import { ensureLocalAudio } from './webrtc/media';
@@ -17,11 +18,18 @@ type SignalPayload = {
 };
 
   const DESKTOP_WS_FALLBACK = import.meta.env.VITE_DESKTOP_WS_URL ?? 'wss://mettta.space/ws';
-const WS_URL =
-  import.meta.env.VITE_WS_URL ??
-  (window.location.protocol === 'app:'
-    ? DESKTOP_WS_FALLBACK
-    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
+const DEFAULT_WS_URL = (() => {
+  if (window.location.protocol === 'app:') return DESKTOP_WS_FALLBACK;
+
+  const isLocalhost =
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocalhost) {
+    return `ws://${window.location.hostname}:3001/ws`;
+  }
+
+  return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+})();
+const WS_URL = import.meta.env.VITE_WS_URL ?? DEFAULT_WS_URL;
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
 
@@ -53,6 +61,8 @@ function App() {
   const [lobbies, setLobbies] = useState<LobbyInfo[]>([]);
   const [lobbyId, setLobbyId] = useState<string | undefined>();
   const [users, setUsers] = useState<LobbyUser[]>([]);
+  const [chatByLobby, setChatByLobby] = useState<Record<string, ChatMessage[]>>({});
+  const [chatInput, setChatInput] = useState('');
   const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
   const [selfMuted, setSelfMuted] = useState(true);
   const [selfHandRaised, setSelfHandRaised] = useState(false);
@@ -144,6 +154,8 @@ function App() {
     setLobbyId(undefined);
     setSelfMuted(true);
     setSelfHandRaised(false);
+    setChatByLobby({});
+    setChatInput('');
     reset();
   }, [cleanupPeer, reset]);
 
@@ -570,6 +582,13 @@ function App() {
     setStatus('idle');
   }, [cleanupAll, setStatus, setLocalMuteState, stopScreenShareInternal]);
 
+  const handleSendChat = useCallback(() => {
+    const text = chatInput.trim();
+    if (!text) return;
+    clientRef.current?.sendChat(text);
+    setChatInput('');
+  }, [chatInput]);
+
   const handleVolume = useCallback(
     (peerId: string, value: number) => {
       volumesRef.current.set(peerId, value);
@@ -615,6 +634,17 @@ function App() {
       setSelfId(clientId);
     });
     const unsubLobbies = client.on('lobbies', (list) => setLobbies(list));
+    const unsubChatHistory = client.on('chatHistory', ({ lobbyId: lid, messages }) => {
+      setChatByLobby((prev) => ({ ...prev, [lid]: messages }));
+    });
+    const unsubChat = client.on('chat', (message) => {
+      setChatByLobby((prev) => {
+        const list = prev[message.lobbyId] ?? [];
+        const next = [...list, message];
+        if (next.length > 200) next.splice(0, next.length - 200);
+        return { ...prev, [message.lobbyId]: next };
+      });
+    });
     const unsubLobbyState = client.on('lobbyState', async ({ lobbyId: lid, users: us }) => {
       setLobbyId(lid);
       setUsers(us);
@@ -715,6 +745,8 @@ function App() {
     return () => {
       unsubWelcome();
       unsubLobbies();
+      unsubChatHistory();
+      unsubChat();
       unsubLobbyState();
       unsubSignal();
       unsubStatus();
@@ -731,19 +763,6 @@ function App() {
 
   return (
     <div className="page audio">
-      <div className="mobile-blocker">
-        <div className="mobile-blocker__card">
-          <div className="mobile-blocker__title">Доступно только на десктопе</div>
-          <div className="mobile-blocker__text">
-            Пожалуйста, откройте mettta.space на компьютере или установите десктопное приложение.
-          </div>
-          <div className="mobile-blocker__actions">
-            <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
-              macOS
-            </a>
-          </div>
-        </div>
-      </div>
       {!isDesktopEnv && (
         <div className="top-banner">
           <div className="logo">mettta.space</div>
@@ -768,6 +787,14 @@ function App() {
                 screenReady={screenReady}
                 onVolume={handleVolume}
                 onOpenScreen={openScreenOverlay}
+              />
+              <ChatPanel
+                messages={chatByLobby[lobbyId] ?? []}
+                selfId={selfId}
+                input={chatInput}
+                onInputChange={setChatInput}
+                onSend={handleSendChat}
+                disabled={!isWsReady}
               />
               <div className="room-controls">
                 <div className="control-pill">

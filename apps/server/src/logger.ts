@@ -1,19 +1,30 @@
 import { appendFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-const LOG_DIR = '/var/log/mira';
-const LOG_FILE = join(LOG_DIR, 'server.log');
-const CLIENT_LOG_FILE = join(LOG_DIR, 'client.log');
+// Для локальной разработки — папка logs в корне проекта; в проде можно задать LOG_DIR=/var/log/mira
+const DEFAULT_LOG_DIR = join(process.cwd(), 'logs');
+const envLogDir = process.env.LOG_DIR;
+let resolvedLogDir = envLogDir ? (envLogDir.startsWith('/') ? envLogDir : join(process.cwd(), envLogDir)) : DEFAULT_LOG_DIR;
 
-// Ensure log directory exists
-if (!existsSync(LOG_DIR)) {
+// Ensure log directory exists; if env path is not writable, fallback to local logs
+try {
+  if (!existsSync(resolvedLogDir)) {
+    mkdirSync(resolvedLogDir, { recursive: true });
+  }
+} catch (error) {
+  console.warn('Could not create log directory, falling back to local logs:', error);
+  resolvedLogDir = DEFAULT_LOG_DIR;
   try {
-    mkdirSync(LOG_DIR, { recursive: true });
-  } catch (error) {
-    // If we can't create log dir, just log to console
-    console.warn('Could not create log directory:', error);
+    if (!existsSync(resolvedLogDir)) {
+      mkdirSync(resolvedLogDir, { recursive: true });
+    }
+  } catch (fallbackError) {
+    console.warn('Fallback log directory also failed; file logging disabled.', fallbackError);
   }
 }
+
+const LOG_FILE = join(resolvedLogDir, 'server.log');
+const CLIENT_LOG_FILE = join(resolvedLogDir, 'client.log');
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

@@ -17,6 +17,8 @@ export class ChatClient {
       welcome: new Set(),
       lobbies: new Set(),
       lobbyState: new Set(),
+      chatHistory: new Set(),
+      chat: new Set(),
       signal: new Set(),
       userStatus: new Set(),
       screenSharer: new Set(),
@@ -82,6 +84,12 @@ export class ChatClient {
         case 'lobbyState':
           this.emit('lobbyState', { lobbyId: parsed.lobbyId, users: parsed.users });
           break;
+        case 'chatHistory':
+          this.emit('chatHistory', { lobbyId: parsed.lobbyId, messages: parsed.messages });
+          break;
+        case 'chat':
+          this.emit('chat', parsed.message);
+          break;
         case 'signal':
           this.emit('signal', { from: parsed.from, payload: parsed.payload });
           break;
@@ -132,6 +140,10 @@ export class ChatClient {
 
   leaveLobby() {
     this.send({ type: 'leaveLobby' });
+  }
+
+  sendChat(text: string) {
+    this.send({ type: 'chat', text });
   }
 
   sendSignal(payload: unknown) {

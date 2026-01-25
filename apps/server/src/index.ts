@@ -1,7 +1,7 @@
 import { createServer } from 'http';
 import { randomUUID } from 'crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { ClientMessage, LobbyInfo, LobbyUser, ServerMessage } from '@chat/shared';
+import type { ChatMessage, ClientMessage, LobbyInfo, LobbyUser, ServerMessage } from '@chat/shared';
 import { writeClientLog } from './logger';
 
 type TrackedSocket = WebSocket & { isAlive?: boolean };
@@ -24,6 +24,7 @@ const mutedState = new Map<string, boolean>(); // clientId -> muted
 const muted = new Map<string, boolean>(); // clientId -> muted
 const screenSharerByLobby = new Map<string, string | null>();
 const handState = new Map<string, boolean>(); // clientId -> hand
+const chatHistoryByLobby = new Map<string, ChatMessage[]>();
 
 const randomName = () => {
   const names = [
@@ -174,6 +175,18 @@ const sendLobbyState = (lobbyId: string) => {
   }
 };
 
+const sendChatHistory = (clientId: string, lobbyId: string) => {
+  const messages = chatHistoryByLobby.get(lobbyId) ?? [];
+  sendToClient(clientId, { type: 'chatHistory', lobbyId, messages });
+};
+
+const broadcastChat = (lobbyId: string, message: ChatMessage) => {
+  const users = lobbyUsers.get(lobbyId) ?? [];
+  for (const user of users) {
+    sendToClient(user.id, { type: 'chat', message });
+  }
+};
+
 const broadcastStatus = (lobbyId: string, userId: string, muted: boolean) => {
   const users = lobbyUsers.get(lobbyId) ?? [];
   for (const user of users) {
@@ -187,6 +200,9 @@ const leaveCurrentLobby = (clientId: string) => {
   const users = lobbyUsers.get(lobbyId) ?? [];
   const filtered = users.filter((u) => u.id !== clientId);
   lobbyUsers.set(lobbyId, filtered);
+  if (filtered.length === 0) {
+    chatHistoryByLobby.delete(lobbyId);
+  }
   lobbyByClient.delete(clientId);
   muted.delete(clientId);
   if (screenSharerByLobby.get(lobbyId) === clientId) {
@@ -263,6 +279,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       // Уже в этом лобби
       if (users.find((u) => u.id === clientId)) {
         sendLobbyState(lobby.id);
+        sendChatHistory(clientId, lobby.id);
         broadcastLobbies();
         return;
       }
@@ -273,6 +290,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       lobbyByClient.set(clientId, lobby.id);
       broadcastLobbies();
       sendLobbyState(lobby.id);
+      sendChatHistory(clientId, lobby.id);
       break;
     }
     case 'leaveLobby': {
@@ -346,6 +364,30 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       for (const u of users) {
         sendToClient(u.id, { type: 'hand', userId: clientId, raised: !!data.raised });
       }
+      break;
+    }
+    case 'chat': {
+      const lobbyId = lobbyByClient.get(clientId);
+      if (!lobbyId) break;
+      const text = data.text?.trim();
+      if (!text) return;
+      if (text.length > 500) {
+        sendToClient(clientId, { type: 'error', message: 'Message too long' });
+        return;
+      }
+      const message: ChatMessage = {
+        id: randomUUID(),
+        lobbyId,
+        userId: clientId,
+        displayName: displayNames.get(clientId) ?? 'User',
+        text,
+        createdAt: new Date().toISOString()
+      };
+      const history = chatHistoryByLobby.get(lobbyId) ?? [];
+      history.push(message);
+      if (history.length > 50) history.splice(0, history.length - 50);
+      chatHistoryByLobby.set(lobbyId, history);
+      broadcastChat(lobbyId, message);
       break;
     }
     case 'clientLog': {

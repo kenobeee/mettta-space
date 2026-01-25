@@ -13,6 +13,7 @@ apps/desktop/web-dist
 .expo-shared
 .DS_Store
 *.log
+logs
 pnpm-lock.yaml
 *.cache
 coverage
