@@ -6,9 +6,10 @@ type Props = {
   isWsReady: boolean;
   onJoin: (id: string) => void;
   onLeave: () => void;
+  meetingMetaByLobby?: Record<string, { label: string; disableJoin: boolean }>;
 };
 
-export function LobbyList({ lobbies, lobbyId, isWsReady, onJoin, onLeave }: Props) {
+export function LobbyList({ lobbies, lobbyId, isWsReady, onJoin, onLeave, meetingMetaByLobby }: Props) {
   return (
     <div className="lobbies">
       <div className="lobby-list">
@@ -17,6 +18,9 @@ export function LobbyList({ lobbies, lobbyId, isWsReady, onJoin, onLeave }: Prop
             <div className="lobby-meta">
               <div className="lobby-name">{lobby.name}</div>
               <div className="lobby-count">{lobby.count} чел.</div>
+              {meetingMetaByLobby?.[lobby.id] && (
+                <div className="lobby-meeting">{meetingMetaByLobby[lobby.id].label}</div>
+              )}
             </div>
             {lobbyId === lobby.id ? (
               <button className="leave-btn small" onClick={onLeave}>
@@ -26,7 +30,7 @@ export function LobbyList({ lobbies, lobbyId, isWsReady, onJoin, onLeave }: Prop
               <button
                 className="primary join"
                 onClick={() => onJoin(lobby.id)}
-                disabled={!isWsReady || !!lobbyId}
+                disabled={!isWsReady || !!lobbyId || !!meetingMetaByLobby?.[lobby.id]?.disableJoin}
                 title={lobbyId ? 'Вы уже в лобби' : 'Войти'}
               >
                 Войти

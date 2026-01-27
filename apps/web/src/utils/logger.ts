@@ -32,7 +32,7 @@ class Logger {
         this.logs = JSON.parse(stored);
       }
     } catch (e) {
-      console.error('Failed to load logs:', e);
+      console.error('Не удалось загрузить логи:', e);
     }
   }
 
@@ -43,7 +43,7 @@ class Logger {
       localStorage.setItem('webrtc_logs', JSON.stringify(logsToSave));
       localStorage.setItem('webrtc_logs_session', this.sessionId);
     } catch (e) {
-      console.error('Failed to save logs:', e);
+      console.error('Не удалось сохранить логи:', e);
     }
   }
 
@@ -84,7 +84,7 @@ class Logger {
         this.clientRef.sendLog(level, category, message, data ? this.sanitizeData(data) : undefined);
       } catch (e) {
         // If sending fails, just continue - don't break logging
-        console.warn('Failed to send log to server:', e);
+        console.warn('Не удалось отправить лог на сервер:', e);
       }
     }
   }

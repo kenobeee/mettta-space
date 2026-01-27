@@ -12,14 +12,14 @@ try {
     mkdirSync(resolvedLogDir, { recursive: true });
   }
 } catch (error) {
-  console.warn('Could not create log directory, falling back to local logs:', error);
+  console.warn('Не удалось создать каталог логов, переключаюсь на локальные логи:', error);
   resolvedLogDir = DEFAULT_LOG_DIR;
   try {
     if (!existsSync(resolvedLogDir)) {
       mkdirSync(resolvedLogDir, { recursive: true });
     }
   } catch (fallbackError) {
-    console.warn('Fallback log directory also failed; file logging disabled.', fallbackError);
+    console.warn('Резервный каталог логов тоже недоступен; запись в файл отключена.', fallbackError);
   }
 }
 
@@ -48,7 +48,7 @@ function writeLog(level: LogLevel, category: string, message: string, data?: unk
   
   // Try to write to file
   try {
-    if (existsSync(LOG_DIR)) {
+    if (existsSync(resolvedLogDir)) {
       appendFileSync(LOG_FILE, logLine, 'utf-8');
     }
   } catch {
@@ -77,7 +77,7 @@ export function writeClientLog(clientId: string, level: LogLevel, category: stri
   
   // Try to write to file
   try {
-    if (existsSync(LOG_DIR)) {
+    if (existsSync(resolvedLogDir)) {
       appendFileSync(CLIENT_LOG_FILE, logLine, 'utf-8');
     }
   } catch {

@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { LobbyList } from './components/LobbyList';
 import { ParticipantsGrid } from './components/ParticipantsGrid';
-import { ChatPanel } from './components/ChatPanel';
-import { CalendarView } from './components/CalendarView';
 import { useChatStore } from './store/useChatStore';
 import { ChatClient } from '@chat/shared';
-import type { ChatMessage, LobbyInfo, LobbyUser, Meeting } from '@chat/shared';
+import type { LobbyInfo, LobbyUser } from '@chat/shared';
 import { logger } from './utils/logger';
 import { ICE_SERVERS, SCREEN_CONSTRAINTS_60 } from './webrtc/config';
 import { ensureLocalAudio } from './webrtc/media';
@@ -26,33 +24,6 @@ const WS_URL =
     : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
-
-const isSameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-
-const formatTimeLeft = (ms: number) => {
-  if (ms <= 0) return 'сейчас';
-  const totalMin = Math.ceil(ms / 60000);
-  const hours = Math.floor(totalMin / 60);
-  const mins = totalMin % 60;
-  if (hours <= 0) return `${mins}м`;
-  return mins === 0 ? `${hours}ч` : `${hours}ч ${mins}м`;
-};
-
-const generateFallbackId = () => {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-};
-
-const getDeviceId = () => {
-  const key = 'mira_device_id';
-  const existing = localStorage.getItem(key);
-  if (existing) return existing;
-  const id = crypto.randomUUID ? crypto.randomUUID() : generateFallbackId();
-  localStorage.setItem(key, id);
-  return id;
-};
 
 function App() {
   const { lastError, setStatus, setError, reset, pushLog } = useChatStore();
@@ -82,14 +53,6 @@ function App() {
   const [lobbies, setLobbies] = useState<LobbyInfo[]>([]);
   const [lobbyId, setLobbyId] = useState<string | undefined>();
   const [users, setUsers] = useState<LobbyUser[]>([]);
-  const [chatByLobby, setChatByLobby] = useState<Record<string, ChatMessage[]>>({});
-  const [chatInput, setChatInput] = useState('');
-  const [view, setView] = useState<'calendar' | 'meetings'>('meetings');
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [now, setNow] = useState(() => new Date());
-  const [quickModalOpen, setQuickModalOpen] = useState(false);
-  const [quickTitle, setQuickTitle] = useState('');
-  const [quickDurationMin, setQuickDurationMin] = useState(30);
   const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
   const [selfMuted, setSelfMuted] = useState(true);
   const [selfHandRaised, setSelfHandRaised] = useState(false);
@@ -102,14 +65,16 @@ function App() {
   const [screenOverlayLoading, setScreenOverlayLoading] = useState(false);
   const [screenReady, setScreenReady] = useState<Record<string, boolean>>({});
 
-  const deviceIdRef = useRef<string>(getDeviceId());
+  const deviceIdRef = useRef<string>((() => {
+    const key = 'mira_device_id';
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    localStorage.setItem(key, id);
+    return id;
+  })());
 
   const ensureLocalAudioRef = useCallback(async () => ensureLocalAudio(localStreamRef, logger), []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 30000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const cleanupPeer = useCallback((peerId: string) => {
     const pc = pcsRef.current.get(peerId);
@@ -179,8 +144,6 @@ function App() {
     setLobbyId(undefined);
     setSelfMuted(true);
     setSelfHandRaised(false);
-    setChatByLobby({});
-    setChatInput('');
     reset();
   }, [cleanupPeer, reset]);
 
@@ -607,64 +570,6 @@ function App() {
     setStatus('idle');
   }, [cleanupAll, setStatus, setLocalMuteState, stopScreenShareInternal]);
 
-  const handleSendChat = useCallback(() => {
-    const text = chatInput.trim();
-    if (!text) return;
-    clientRef.current?.sendChat(text);
-    setChatInput('');
-  }, [chatInput]);
-
-  const handleCreateMeeting = useCallback(
-    (meeting: { title: string; startsAt: string; durationMin: number }) => {
-      clientRef.current?.createMeeting(meeting);
-    },
-    []
-  );
-
-  const handleUpdateMeeting = useCallback(
-    (meeting: { id: string; title: string; startsAt: string; durationMin: number }) => {
-      clientRef.current?.updateMeeting(meeting);
-    },
-    []
-  );
-
-  const handleDeleteMeeting = useCallback((id: string) => {
-    clientRef.current?.deleteMeeting(id);
-  }, []);
-
-  const meetingMetaByLobby = useMemo(() => {
-    const meta: Record<string, { label: string; disableJoin: boolean }> = {};
-    for (const lobby of lobbies) {
-      const todayMeetings = meetings
-        .filter((meeting) => meeting.lobbyId === lobby.id)
-        .filter((meeting) => isSameDay(new Date(meeting.startsAt), now))
-        .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
-
-      const nextMeeting = todayMeetings.find((meeting) => new Date(meeting.startsAt).getTime() > now.getTime());
-      if (nextMeeting) {
-        const startsAt = new Date(nextMeeting.startsAt);
-        meta[lobby.id] = {
-          label: `Старт через ${formatTimeLeft(startsAt.getTime() - now.getTime())}`,
-          disableJoin: true
-        };
-        continue;
-      }
-
-      const activeMeeting = todayMeetings.find((meeting) => {
-        const start = new Date(meeting.startsAt).getTime();
-        const end = meeting.durationMin === 0 ? Number.POSITIVE_INFINITY : start + meeting.durationMin * 60_000;
-        return now.getTime() >= start && now.getTime() <= end;
-      });
-      if (activeMeeting) {
-        meta[lobby.id] = {
-          label: 'Идёт сейчас',
-          disableJoin: false
-        };
-      }
-    }
-    return meta;
-  }, [lobbies, meetings, now]);
-
   const handleVolume = useCallback(
     (peerId: string, value: number) => {
       volumesRef.current.set(peerId, value);
@@ -710,18 +615,6 @@ function App() {
       setSelfId(clientId);
     });
     const unsubLobbies = client.on('lobbies', (list) => setLobbies(list));
-    const unsubMeetings = client.on('meetings', (list) => setMeetings(list));
-    const unsubChatHistory = client.on('chatHistory', ({ lobbyId: lid, messages }) => {
-      setChatByLobby((prev) => ({ ...prev, [lid]: messages }));
-    });
-    const unsubChat = client.on('chat', (message) => {
-      setChatByLobby((prev) => {
-        const list = prev[message.lobbyId] ?? [];
-        const next = [...list, message];
-        if (next.length > 200) next.splice(0, next.length - 200);
-        return { ...prev, [message.lobbyId]: next };
-      });
-    });
     const unsubLobbyState = client.on('lobbyState', async ({ lobbyId: lid, users: us }) => {
       setLobbyId(lid);
       setUsers(us);
@@ -808,7 +701,6 @@ function App() {
       setIsWsReady(true);
       client.sendDevice(deviceIdRef.current);
       client.listLobbies();
-      client.listMeetings();
     });
     const unsubClose = client.on('close', () => {
       setIsWsReady(false);
@@ -823,9 +715,6 @@ function App() {
     return () => {
       unsubWelcome();
       unsubLobbies();
-      unsubMeetings();
-      unsubChatHistory();
-      unsubChat();
       unsubLobbyState();
       unsubSignal();
       unsubStatus();
@@ -838,120 +727,80 @@ function App() {
       logger.setClient(null);
       client.disconnect();
     };
-  }, [
-    attachScreen,
-    cleanupAll,
-    cleanupPeer,
-    createPeerConnection,
-    ensureAudioContext,
-    handleSignal,
-    pushLog,
-    scheduleRenegotiate,
-    setError,
-    setLocalMuteState,
-    setStatus,
-    stopScreenShareInternal
-  ]);
+  }, [cleanupAll, cleanupPeer, createPeerConnection, handleSignal, pushLog, setError, setStatus, attachScreen, renegotiatePeer]);
 
   return (
     <div className="page audio">
-      <div className="top-banner">
-        <div className="logo">mettta.space</div>
-        <div className="tabs">
-          <button
-            className={`tab ${view === 'calendar' ? 'active' : ''}`}
-            onClick={() => setView('calendar')}
-          >
-            календарь
-          </button>
-          <button
-            className={`tab ${view === 'meetings' ? 'active' : ''}`}
-            onClick={() => setView('meetings')}
-          >
-            встречи
-          </button>
-        </div>
-        <div className="header-actions">
-          <button className="quick-btn" onClick={() => setQuickModalOpen(true)}>
-            Быстрый запуск
-          </button>
+      <div className="mobile-blocker">
+        <div className="mobile-blocker__card">
+          <div className="mobile-blocker__title">Доступно только на десктопе</div>
+          <div className="mobile-blocker__text">
+            Пожалуйста, откройте mettta.space на компьютере или установите десктопное приложение.
+          </div>
+          <div className="mobile-blocker__actions">
+            <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
+              macOS
+            </a>
+          </div>
         </div>
       </div>
-      <div className={`layout ${view === 'calendar' ? 'calendar-layout' : ''}`}>
-        {view === 'calendar' ? (
-          <CalendarView
-            meetings={meetings}
-            onCreateMeeting={handleCreateMeeting}
-            onUpdateMeeting={handleUpdateMeeting}
-            onDeleteMeeting={handleDeleteMeeting}
-          />
-        ) : (
-          <>
-            <LobbyList
-              lobbies={lobbies}
-              lobbyId={lobbyId}
-              isWsReady={isWsReady}
-              onJoin={joinLobby}
-              onLeave={leaveLobby}
-              meetingMetaByLobby={meetingMetaByLobby}
-            />
+      {!isDesktopEnv && (
+        <div className="top-banner">
+          <div className="logo">mettta.space</div>
+          <div className="downloads">
+            <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
+              macOS
+            </a>
+          </div>
+        </div>
+      )}
+      <div className="layout">
+        <LobbyList lobbies={lobbies} lobbyId={lobbyId} isWsReady={isWsReady} onJoin={joinLobby} onLeave={leaveLobby} />
 
-            <div className="room">
-              {lobbyId ? (
-                <>
-                  <div className="room-body">
-                    <ParticipantsGrid
-                      users={users}
-                      selfId={selfId}
-                      active={active}
-                      volumes={volumes}
-                      screenReady={screenReady}
-                      onVolume={handleVolume}
-                      onOpenScreen={openScreenOverlay}
-                    />
-                    <ChatPanel
-                      messages={chatByLobby[lobbyId] ?? []}
-                      selfId={selfId}
-                      input={chatInput}
-                      onInputChange={setChatInput}
-                      onSend={handleSendChat}
-                      disabled={!isWsReady}
-                    />
-                  </div>
-                  <div className="room-controls">
-                    <div className="control-pill">
-                      <button
-                        className={`pill-btn ${selfMuted ? 'off' : 'on'}`}
-                        onClick={toggleMute}
-                        aria-label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
-                      >
-                        <span className="pill-icon">🎤</span>
-                      </button>
-                      <button
-                        className={`pill-btn ${screenSharerId === selfId ? 'on' : 'off'}`}
-                        aria-label="Демонстрация экрана"
-                        onClick={toggleScreenShare}
-                        title={screenSharerId === selfId ? 'Остановить демонстрацию' : 'Начать демонстрацию'}
-                        disabled={screenSharerId !== null && screenSharerId !== selfId}
-                      >
-                        <span className="pill-icon">🖥️</span>
-                      </button>
-                      <button
-                        className={`pill-btn ${selfHandRaised ? 'on' : 'off'}`}
-                        aria-label={selfHandRaised ? 'Опустить руку' : 'Поднять руку'}
-                        onClick={toggleHand}
-                      >
-                        <span className="pill-icon">✋</span>
-                      </button>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="placeholder">Выберите встречу, чтобы войти</div>
-              )}
-            </div>
-          </>
-        )}
+        <div className="room">
+          {lobbyId ? (
+            <>
+              <ParticipantsGrid
+                users={users}
+                selfId={selfId}
+                active={active}
+                volumes={volumes}
+                screenReady={screenReady}
+                onVolume={handleVolume}
+                onOpenScreen={openScreenOverlay}
+              />
+              <div className="room-controls">
+                <div className="control-pill">
+                  <button
+                    className={`pill-btn ${selfMuted ? 'off' : 'on'}`}
+                    onClick={toggleMute}
+                    aria-label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+                  >
+                    <span className="pill-icon">🎤</span>
+                  </button>
+                  <button
+                  className={`pill-btn ${screenSharerId === selfId ? 'on' : 'off'}`}
+                    aria-label="Демонстрация экрана"
+                    onClick={toggleScreenShare}
+                    title={screenSharerId === selfId ? 'Остановить демонстрацию' : 'Начать демонстрацию'}
+                  disabled={screenSharerId !== null && screenSharerId !== selfId}
+                  >
+                    <span className="pill-icon">🖥️</span>
+                  </button>
+                  <button
+                    className={`pill-btn ${selfHandRaised ? 'on' : 'off'}`}
+                    aria-label={selfHandRaised ? 'Опустить руку' : 'Поднять руку'}
+                    onClick={toggleHand}
+                  >
+                    <span className="pill-icon">✋</span>
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="placeholder">Select a lobby to join</div>
+          )}
+        </div>
       </div>
       {screenOverlayPeerId && (
         <div className={`screen-overlay ${screenOverlayOpen ? 'open' : 'hidden'}`}>
@@ -972,59 +821,8 @@ function App() {
           <video ref={screenOverlayVideoRef} autoPlay playsInline muted />
         </div>
       )}
-      {lastError && <div className="error">Ошибка: {lastError}</div>}
-      {quickModalOpen && (
-        <div className="modal">
-          <div className="modal-backdrop" onClick={() => setQuickModalOpen(false)} />
-          <div className="modal-card">
-            <div className="modal-title">Быстрый запуск встречи</div>
-            <input
-              type="text"
-              placeholder="Название"
-              value={quickTitle}
-              onChange={(event) => setQuickTitle(event.target.value)}
-            />
-            <select value={quickDurationMin} onChange={(event) => setQuickDurationMin(Number(event.target.value))}>
-              {[15, 30, 45, 60, 90, 120].map((value) => (
-                <option key={value} value={value}>
-                  {value} мин
-                </option>
-              ))}
-              <option value={0}>Без лимита</option>
-            </select>
-            <div className="modal-actions">
-              <button
-                className="primary"
-                onClick={() => {
-                  const title = quickTitle.trim();
-                  if (!title) return;
-                  handleCreateMeeting({
-                    title,
-                    startsAt: new Date().toISOString(),
-                    durationMin: quickDurationMin
-                  });
-                  setQuickTitle('');
-                  setQuickDurationMin(30);
-                  setQuickModalOpen(false);
-                }}
-              >
-                Создать
-              </button>
-              <button className="ghost" onClick={() => setQuickModalOpen(false)}>
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {!isDesktopEnv && (
-        <div className="footer">
-          <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
-            macOS
-          </a>
-        </div>
-      )}
-    </div>
+      {lastError && <div className="error">Error: {lastError}</div>}
+      </div>
   );
 }
 

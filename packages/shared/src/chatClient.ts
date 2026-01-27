@@ -19,6 +19,7 @@ export class ChatClient {
       lobbyState: new Set(),
       chatHistory: new Set(),
       chat: new Set(),
+      meetings: new Set(),
       signal: new Set(),
       userStatus: new Set(),
       screenSharer: new Set(),
@@ -90,6 +91,9 @@ export class ChatClient {
         case 'chat':
           this.emit('chat', parsed.message);
           break;
+        case 'meetings':
+          this.emit('meetings', parsed.meetings);
+          break;
         case 'signal':
           this.emit('signal', { from: parsed.from, payload: parsed.payload });
           break;
@@ -144,6 +148,22 @@ export class ChatClient {
 
   sendChat(text: string) {
     this.send({ type: 'chat', text });
+  }
+
+  listMeetings() {
+    this.send({ type: 'listMeetings' });
+  }
+
+  createMeeting(meeting: { title: string; startsAt: string; durationMin: number }) {
+    this.send({ type: 'createMeeting', meeting });
+  }
+
+  updateMeeting(meeting: { id: string; title: string; startsAt: string; durationMin: number }) {
+    this.send({ type: 'updateMeeting', meeting });
+  }
+
+  deleteMeeting(id: string) {
+    this.send({ type: 'deleteMeeting', id });
   }
 
   sendSignal(payload: unknown) {

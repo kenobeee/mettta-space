@@ -1,16 +1,16 @@
 import { createServer } from 'http';
 import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { ChatMessage, ClientMessage, LobbyInfo, LobbyUser, ServerMessage } from '@chat/shared';
+import type { ChatMessage, ClientMessage, LobbyInfo, LobbyUser, Meeting, ServerMessage } from '@chat/shared';
 import { writeClientLog } from './logger';
 
 type TrackedSocket = WebSocket & { isAlive?: boolean };
 
 const PORT = Number(process.env.PORT ?? 3001);
-const LOBBIES: LobbyInfo[] = [
-  { id: 'l1', name: 'TTT daily', count: 0, capacity: 0 },
-  { id: 'l2', name: 'Mascot daily', count: 0, capacity: 0 }
-];
+const DATA_DIR = join(process.cwd(), 'data');
+const MEETINGS_FILE = join(DATA_DIR, 'meetings.json');
 
 const httpServer = createServer();
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
@@ -25,6 +25,61 @@ const muted = new Map<string, boolean>(); // clientId -> muted
 const screenSharerByLobby = new Map<string, string | null>();
 const handState = new Map<string, boolean>(); // clientId -> hand
 const chatHistoryByLobby = new Map<string, ChatMessage[]>();
+const meetingsById = new Map<string, Meeting>();
+
+const isSameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+const getMeetingEnd = (startsAt: Date, durationMin: number) =>
+  durationMin === 0 ? Number.POSITIVE_INFINITY : startsAt.getTime() + durationMin * 60_000;
+
+const hasMeetingConflict = (candidate: { startsAt: Date; durationMin: number; excludeId?: string }) => {
+  const start = candidate.startsAt.getTime();
+  const end = getMeetingEnd(candidate.startsAt, candidate.durationMin);
+  for (const meeting of meetingsById.values()) {
+    if (candidate.excludeId && meeting.id === candidate.excludeId) continue;
+    const existingStart = new Date(meeting.startsAt).getTime();
+    const existingEnd = getMeetingEnd(new Date(meeting.startsAt), meeting.durationMin);
+    if (start < existingEnd && end > existingStart) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const saveMeetings = () => {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const payload = Array.from(meetingsById.values());
+  writeFileSync(MEETINGS_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+};
+
+const loadMeetings = () => {
+  if (!existsSync(MEETINGS_FILE)) return;
+  try {
+    const raw = JSON.parse(readFileSync(MEETINGS_FILE, 'utf-8')) as Meeting[];
+    raw.forEach((meeting) => {
+      if (!meeting?.id || !meeting?.startsAt) return;
+      meetingsById.set(meeting.id, meeting);
+    });
+  } catch {
+    // ignore corrupted file
+  }
+};
+
+const getMeetingLobbies = (now = new Date()): LobbyInfo[] => {
+  const list = Array.from(meetingsById.values())
+    .filter((meeting) => {
+      const start = new Date(meeting.startsAt);
+      const end = getMeetingEnd(start, meeting.durationMin);
+      return isSameDay(start, now) && end >= now.getTime();
+    })
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())
+    .map((meeting) => {
+      const users = lobbyUsers.get(meeting.id) ?? [];
+      return { id: meeting.id, name: meeting.title, count: users.length, capacity: 0 };
+    });
+  return list;
+};
 
 const randomName = () => {
   const names = [
@@ -137,6 +192,8 @@ const randomName = () => {
   return names[Math.floor(Math.random() * names.length)];
 };
 
+loadMeetings();
+
 const sendSafe = (ws: WebSocket, message: ServerMessage) => {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(message));
@@ -151,13 +208,26 @@ const sendToClient = (clientId: string, message: ServerMessage) => {
 };
 
 const broadcastLobbies = () => {
-  const summary = LOBBIES.map((lobby) => {
-    const users = lobbyUsers.get(lobby.id) ?? [];
-    return { ...lobby, count: users.length };
-  });
+  const summary = getMeetingLobbies();
   for (const id of sockets.keys()) {
     sendToClient(id, { type: 'lobbies', lobbies: summary });
   }
+};
+
+const broadcastMeetings = () => {
+  const meetings = Array.from(meetingsById.values()).sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+  );
+  for (const id of sockets.keys()) {
+    sendToClient(id, { type: 'meetings', meetings });
+  }
+};
+
+const sendMeetings = (clientId: string) => {
+  const meetings = Array.from(meetingsById.values()).sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+  );
+  sendToClient(clientId, { type: 'meetings', meetings });
 };
 
 const sendLobbyState = (lobbyId: string) => {
@@ -184,13 +254,6 @@ const broadcastChat = (lobbyId: string, message: ChatMessage) => {
   const users = lobbyUsers.get(lobbyId) ?? [];
   for (const user of users) {
     sendToClient(user.id, { type: 'chat', message });
-  }
-};
-
-const broadcastStatus = (lobbyId: string, userId: string, muted: boolean) => {
-  const users = lobbyUsers.get(lobbyId) ?? [];
-  for (const user of users) {
-    sendToClient(user.id, { type: 'userStatus', userId, muted });
   }
 };
 
@@ -244,7 +307,7 @@ const parseClientMessage = (raw: WebSocket.RawData): ClientMessage | null => {
 const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
   const data = parseClientMessage(raw);
   if (!data) {
-    sendToClient(clientId, { type: 'error', message: 'Invalid JSON' });
+    sendToClient(clientId, { type: 'error', message: 'Некорректный JSON' });
     return;
   }
 
@@ -256,12 +319,12 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
     case 'clientInfo': {
       const deviceId = data.deviceId;
       if (!deviceId) {
-        sendToClient(clientId, { type: 'error', message: 'Device required' });
+        sendToClient(clientId, { type: 'error', message: 'Нужен deviceId' });
         return;
       }
       const existing = deviceToClient.get(deviceId);
       if (existing && existing !== clientId && sockets.has(existing)) {
-        sendToClient(clientId, { type: 'error', message: 'Device already connected' });
+        sendToClient(clientId, { type: 'error', message: 'Устройство уже подключено' });
         const ws = sockets.get(clientId);
         ws?.close(4001, 'duplicate device');
         return;
@@ -270,27 +333,43 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'joinLobby': {
-      const lobby = LOBBIES.find((l) => l.id === data.lobbyId);
-      if (!lobby) {
-        sendToClient(clientId, { type: 'error', message: 'Lobby not found' });
+      const meeting = meetingsById.get(data.lobbyId);
+      if (!meeting) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча не найдена' });
         return;
       }
-      const users = lobbyUsers.get(lobby.id) ?? [];
+      const now = new Date();
+      const start = new Date(meeting.startsAt);
+      const end = getMeetingEnd(start, meeting.durationMin);
+      if (!isSameDay(start, now)) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча не запланирована на сегодня' });
+        return;
+      }
+      if (now.getTime() < start.getTime()) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча еще не началась' });
+        return;
+      }
+      if (now.getTime() > end) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча уже завершена' });
+        return;
+      }
+      const lobbyId = meeting.id;
+      const users = lobbyUsers.get(lobbyId) ?? [];
       // Уже в этом лобби
       if (users.find((u) => u.id === clientId)) {
-        sendLobbyState(lobby.id);
-        sendChatHistory(clientId, lobby.id);
+        sendLobbyState(lobbyId);
+        sendChatHistory(clientId, lobbyId);
         broadcastLobbies();
         return;
       }
       leaveCurrentLobby(clientId);
       const name = displayNames.get(clientId) ?? randomName();
       displayNames.set(clientId, name);
-      lobbyUsers.set(lobby.id, [...users, { id: clientId, displayName: name, muted: mutedState.get(clientId) ?? false }]);
-      lobbyByClient.set(clientId, lobby.id);
+      lobbyUsers.set(lobbyId, [...users, { id: clientId, displayName: name, muted: mutedState.get(clientId) ?? false }]);
+      lobbyByClient.set(clientId, lobbyId);
       broadcastLobbies();
-      sendLobbyState(lobby.id);
-      sendChatHistory(clientId, lobby.id);
+      sendLobbyState(lobbyId);
+      sendChatHistory(clientId, lobbyId);
       break;
     }
     case 'leaveLobby': {
@@ -300,15 +379,18 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
     case 'signal': {
       const targetId = data.targetId;
       if (!targetId) {
-        sendToClient(clientId, { type: 'error', message: 'No target' });
+        sendToClient(clientId, { type: 'error', message: 'Нет получателя' });
         return;
       }
       const lobbyId = lobbyByClient.get(clientId);
       if (!lobbyId || lobbyByClient.get(targetId) !== lobbyId) {
-        sendToClient(clientId, { type: 'error', message: 'Not in same lobby' });
+        sendToClient(clientId, { type: 'error', message: 'Не в одной встрече' });
         return;
       }
       sendToClient(targetId, { type: 'signal', from: clientId, payload: data.payload });
+      if ('sdp' in (data.payload as Record<string, unknown>)) {
+      } else if ('candidate' in (data.payload as Record<string, unknown>)) {
+      }
       break;
     }
     case 'status': {
@@ -366,20 +448,119 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       }
       break;
     }
+    case 'listMeetings': {
+      sendMeetings(clientId);
+      break;
+    }
+    case 'createMeeting': {
+      const meeting = data.meeting;
+      const title = meeting.title?.trim();
+      if (!title || title.length > 80) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректное название встречи' });
+        return;
+      }
+      const duration = Number(meeting.durationMin);
+      if (!Number.isFinite(duration) || duration < 0 || duration > 480) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректная длительность встречи' });
+        return;
+      }
+      const start = new Date(meeting.startsAt);
+      if (Number.isNaN(start.getTime())) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректное время встречи' });
+        return;
+      }
+      const now = new Date();
+      if (start.getTime() < now.getTime() - 60_000) {
+        sendToClient(clientId, { type: 'error', message: 'Время встречи должно быть в будущем' });
+        return;
+      }
+      if (hasMeetingConflict({ startsAt: start, durationMin: duration })) {
+        sendToClient(clientId, { type: 'error', message: 'Время встречи пересекается с другой' });
+        return;
+      }
+      const meetingId = randomUUID();
+      const created: Meeting = {
+        id: meetingId,
+        lobbyId: meetingId,
+        title,
+        startsAt: start.toISOString(),
+        durationMin: duration,
+        createdAt: new Date().toISOString()
+      };
+      meetingsById.set(created.id, created);
+      saveMeetings();
+      broadcastMeetings();
+      broadcastLobbies();
+      break;
+    }
+    case 'updateMeeting': {
+      const meeting = data.meeting;
+      const existing = meetingsById.get(meeting.id);
+      if (!existing) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча не найдена' });
+        return;
+      }
+      const title = meeting.title?.trim();
+      if (!title || title.length > 80) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректное название встречи' });
+        return;
+      }
+      const duration = Number(meeting.durationMin);
+      if (!Number.isFinite(duration) || duration < 0 || duration > 480) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректная длительность встречи' });
+        return;
+      }
+      const start = new Date(meeting.startsAt);
+      if (Number.isNaN(start.getTime())) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректное время встречи' });
+        return;
+      }
+      const now = new Date();
+      if (start.getTime() < now.getTime() - 60_000) {
+        sendToClient(clientId, { type: 'error', message: 'Время встречи должно быть в будущем' });
+        return;
+      }
+      if (hasMeetingConflict({ startsAt: start, durationMin: duration, excludeId: meeting.id })) {
+        sendToClient(clientId, { type: 'error', message: 'Время встречи пересекается с другой' });
+        return;
+      }
+      const updated: Meeting = {
+        ...existing,
+        title,
+        startsAt: start.toISOString(),
+        durationMin: duration
+      };
+      meetingsById.set(updated.id, updated);
+      saveMeetings();
+      broadcastMeetings();
+      broadcastLobbies();
+      break;
+    }
+    case 'deleteMeeting': {
+      if (!meetingsById.has(data.id)) {
+        sendToClient(clientId, { type: 'error', message: 'Встреча не найдена' });
+        return;
+      }
+      meetingsById.delete(data.id);
+      saveMeetings();
+      broadcastMeetings();
+      broadcastLobbies();
+      break;
+    }
     case 'chat': {
       const lobbyId = lobbyByClient.get(clientId);
       if (!lobbyId) break;
       const text = data.text?.trim();
       if (!text) return;
       if (text.length > 500) {
-        sendToClient(clientId, { type: 'error', message: 'Message too long' });
+        sendToClient(clientId, { type: 'error', message: 'Сообщение слишком длинное' });
         return;
       }
       const message: ChatMessage = {
         id: randomUUID(),
         lobbyId,
         userId: clientId,
-        displayName: displayNames.get(clientId) ?? 'User',
+        displayName: displayNames.get(clientId) ?? 'Пользователь',
         text,
         createdAt: new Date().toISOString()
       };
@@ -395,7 +576,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     default:
-      sendToClient(clientId, { type: 'error', message: 'Unknown message' });
+      sendToClient(clientId, { type: 'error', message: 'Неизвестное сообщение' });
   }
 };
 
@@ -406,7 +587,8 @@ wss.on('connection', (socket: TrackedSocket) => {
   displayNames.set(clientId, randomName());
 
   sendToClient(clientId, { type: 'welcome', clientId });
-  sendToClient(clientId, { type: 'lobbies', lobbies: LOBBIES.map((l) => ({ ...l, count: (lobbyUsers.get(l.id) ?? []).length })) });
+  sendToClient(clientId, { type: 'lobbies', lobbies: getMeetingLobbies() });
+  sendMeetings(clientId);
 
   socket.on('pong', () => {
     socket.isAlive = true;
@@ -414,7 +596,7 @@ wss.on('connection', (socket: TrackedSocket) => {
 
   socket.on('message', (raw) => handleMessage(clientId, raw));
 
-  socket.on('close', (code, reason) => {
+  socket.on('close', () => {
     leaveCurrentLobby(clientId);
     sockets.delete(clientId);
     displayNames.delete(clientId);
@@ -423,7 +605,7 @@ wss.on('connection', (socket: TrackedSocket) => {
     }
   });
 
-  socket.on('error', (err) => {
+  socket.on('error', () => {
     // suppress server-side logging
   });
 });

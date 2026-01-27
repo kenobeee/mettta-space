@@ -12,11 +12,19 @@ type Props = {
 
 export function ParticipantsGrid({ users, selfId, active, volumes, screenReady, onVolume, onOpenScreen }: Props) {
   if (!users.length) {
-    return <div className="participants placeholder">No one here yet</div>;
+    return <div className="participants placeholder">Пока никого нет</div>;
   }
 
+  const count = users.length;
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const gridStyle = {
+    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+    gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`
+  };
+
   return (
-    <div className="participants">
+    <div className="participants" style={gridStyle}>
       {users.map((u) => (
         <div
           key={u.id}
@@ -27,8 +35,7 @@ export function ParticipantsGrid({ users, selfId, active, volumes, screenReady, 
             <button
               className="screen-chip"
               onClick={() => onOpenScreen(u.id)}
-              title={screenReady[u.id] ? 'Открыть трансляцию экрана' : 'Поток еще загружается'}
-              disabled={!screenReady[u.id]}
+              title={screenReady[u.id] ? 'Открыть трансляцию экрана' : 'Поток загружается, можно открыть'}
             >
               🖥️ Смотреть
             </button>

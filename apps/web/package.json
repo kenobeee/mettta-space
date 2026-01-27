@@ -13,6 +13,7 @@
     "@chat/shared": "file:../../packages/shared",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "simple-peer": "^9.11.1",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

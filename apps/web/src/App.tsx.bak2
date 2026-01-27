@@ -19,11 +19,18 @@ type SignalPayload = {
 };
 
   const DESKTOP_WS_FALLBACK = import.meta.env.VITE_DESKTOP_WS_URL ?? 'wss://mettta.space/ws';
-const WS_URL =
-  import.meta.env.VITE_WS_URL ??
-  (window.location.protocol === 'app:'
-    ? DESKTOP_WS_FALLBACK
-    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
+const DEFAULT_WS_URL = (() => {
+  if (window.location.protocol === 'app:') return DESKTOP_WS_FALLBACK;
+
+  const isLocalhost =
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocalhost) {
+    return `ws://${window.location.hostname}:3001/ws`;
+  }
+
+  return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+})();
+const WS_URL = import.meta.env.VITE_WS_URL ?? DEFAULT_WS_URL;
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
 
@@ -224,7 +231,7 @@ function App() {
   const waitForScreenStream = useCallback(
     (peerId: string, timeoutMs = 3000) =>
       waitForScreenStreamHelper(peerId, screenStreamsRef, logger, timeoutMs),
-    [logger]
+    []
   );
 
   const markScreenReady = useCallback((peerId: string) => {
@@ -238,7 +245,7 @@ function App() {
     while (queue.length) {
       const cand = queue.shift();
       if (!cand) continue;
-      await pc.addIceCandidate(cand).catch((err) => logger.error('WebRTC', 'Failed to add queued ICE', { err }));
+      await pc.addIceCandidate(cand).catch((err) => logger.error('WebRTC', 'Не удалось добавить отложенный ICE', { err }));
     }
   }, []);
 
@@ -303,19 +310,34 @@ function App() {
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          logger.info('WebRTC', 'local ICE candidate', {
+            peerId,
+            type: event.candidate.type,
+            protocol: event.candidate.protocol,
+            address: event.candidate.address
+          });
           clientRef.current?.sendSignalTo(peerId, { candidate: event.candidate });
         }
       };
 
-      pc.onicecandidateerror = (event) => {
-        logger.error('WebRTC', 'ICE candidate error', {
-          errorCode: (event as any).errorCode,
-          errorText: (event as any).errorText,
-          url: (event as any).url
+      pc.onicecandidateerror = (event: RTCPeerConnectionIceErrorEvent) => {
+        logger.error('WebRTC', 'Ошибка ICE-кандидата', {
+          errorCode: event.errorCode,
+          errorText: event.errorText,
+          url: event.url
         });
       };
 
+      pc.onsignalingstatechange = () => {
+        logger.info('WebRTC', 'signalingstatechange', { peerId, state: pc.signalingState });
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        logger.info('WebRTC', 'iceconnectionstatechange', { peerId, state: pc.iceConnectionState });
+      };
+
       pc.onconnectionstatechange = () => {
+        logger.info('WebRTC', 'connectionstatechange', { peerId, state: pc.connectionState });
         if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           cleanupPeer(peerId);
         }
@@ -323,7 +345,7 @@ function App() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0] ?? new MediaStream([event.track]);
-        logger.info('WebRTC', 'ontrack', {
+        logger.info('WebRTC', 'получен трек', {
           peerId,
           kind: event.track.kind,
           trackId: event.track.id,
@@ -364,7 +386,7 @@ function App() {
             videoEl.play().catch(() => {});
           }
           event.track.onunmute = () => {
-            logger.info('WebRTC', 'video track onunmute', {
+            logger.info('WebRTC', 'видео-трек активировался', {
               peerId,
               trackId: event.track.id,
               readyState: event.track.readyState
@@ -378,6 +400,7 @@ function App() {
             }
           };
           event.track.onended = () => {
+            logger.warn('WebRTC', 'видео-трек завершился', { peerId, trackId: event.track.id });
             const v = screenStreamsRef.current.get(peerId);
             if (v) v.getTracks().forEach((t) => t.stop());
             screenStreamsRef.current.delete(peerId);
@@ -403,12 +426,21 @@ function App() {
       }
 
       pc.onnegotiationneeded = async () => {
-        scheduleRenegotiate(peerId, pc);
+        logger.info('WebRTC', 'negotiationneeded', { peerId, signalingState: pc.signalingState });
+        // Используем стабильный SDP; замену трека делаем без ренегоциации
       };
 
       return pc;
     },
-    [cleanupPeer, ensureLocalAudioRef, scheduleRenegotiate]
+    [
+      cleanupPeer,
+      ensureLocalAudioRef,
+      ensureAudioContext,
+      isInitiator,
+      markScreenReady,
+      scheduleRenegotiate,
+      screenOverlayPeerId
+    ]
   );
 
   const handleSignal = useCallback(
@@ -418,27 +450,44 @@ function App() {
         pc = await createPeerConnection(from, false);
       }
       if (!pc) return;
+      const polite = !isInitiator(from);
       if (payload.sdp) {
         const offerCollision =
           payload.sdp.type === 'offer' && (makingOfferRef.current.get(from) || pc.signalingState !== 'stable');
+        const shouldIgnore = !polite && offerCollision;
+        ignoreOfferRef.current.set(from, shouldIgnore);
+        logger.info('WebRTC', 'signal sdp', {
+          from,
+          type: payload.sdp.type,
+          polite,
+          offerCollision,
+          signalingState: pc.signalingState
+        });
+        if (shouldIgnore) {
+          logger.warn('WebRTC', 'игнорируем offer из-за коллизии', { from, signalingState: pc.signalingState });
+          return;
+        }
         if (offerCollision && pc.signalingState !== 'stable') {
           try {
             await pc.setLocalDescription({ type: 'rollback', sdp: undefined });
           } catch (err) {
-            logger.error('WebRTC', 'rollback failed', { err });
+            logger.error('WebRTC', 'не удалось выполнить rollback', { err });
           }
         }
-        ignoreOfferRef.current.set(from, false);
         settingRemoteAnswerRef.current.set(from, payload.sdp.type === 'answer');
         try {
           if (payload.sdp.type === 'answer' && pc.signalingState !== 'have-local-offer') {
             // Ответ пришёл, но локального оффера нет — игнор, чтобы не словить InvalidState
+            logger.warn('WebRTC', 'игнорируем answer без локального offer', {
+              from,
+              signalingState: pc.signalingState
+            });
             settingRemoteAnswerRef.current.set(from, false);
             return;
           }
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
         } catch (err) {
-          logger.error('WebRTC', 'setRemoteDescription failed', { err });
+          logger.error('WebRTC', 'ошибка setRemoteDescription', { err });
           settingRemoteAnswerRef.current.set(from, false);
           return;
         }
@@ -450,7 +499,7 @@ function App() {
             await pc.setLocalDescription(answer);
             clientRef.current?.sendSignalTo(from, { sdp: pc.localDescription });
           } catch (err) {
-            logger.error('WebRTC', 'createAnswer/setLocalDescription failed', { err });
+            logger.error('WebRTC', 'ошибка createAnswer/setLocalDescription', { err });
           }
         }
         return;
@@ -464,11 +513,11 @@ function App() {
           return;
         }
         await pc.addIceCandidate(payload.candidate).catch((err) =>
-          logger.error('WebRTC', 'Failed to add ICE', { err })
+          logger.error('WebRTC', 'Не удалось добавить ICE', { err })
         );
       }
     },
-    [createPeerConnection, flushPending]
+    [createPeerConnection, flushPending, isInitiator]
   );
 
 
@@ -494,6 +543,7 @@ function App() {
       screenStreamRef.current.getTracks().forEach((t) => t.stop());
       screenStreamRef.current = null;
     }
+    logger.info('Screen', 'остановка локального шеринга');
     screenTransceiversRef.current.forEach((tr) => {
       tr.sender.replaceTrack(null).catch(() => {});
       tr.direction = 'recvonly';
@@ -505,7 +555,7 @@ function App() {
     setScreenSharerId(null);
     screenSharerIdRef.current = null;
     setUsers((prev) => prev.map((u) => ({ ...u, isScreenSharer: false })));
-  }, [renegotiatePeer]);
+  }, [scheduleRenegotiate]);
 
   const startScreenShare = useCallback(async () => {
     if (screenStreamRef.current) return;
@@ -516,15 +566,21 @@ function App() {
       if (track.contentHint !== 'detail') {
         track.contentHint = 'detail';
       }
-      logger.info('Screen', 'local getDisplayMedia success', {
+      logger.info('Screen', 'локальный getDisplayMedia успешен', {
         streamId: stream.id,
         trackId: track.id,
         settings: track.getSettings ? track.getSettings() : undefined
       });
       screenStreamRef.current = stream;
       track.onended = () => {
-        logger.info('Screen', 'local track ended');
+        logger.info('Screen', 'локальный трек завершен');
         stopScreenShareInternal();
+      };
+      track.onmute = () => {
+        logger.warn('Screen', 'локальный трек замьючен', { trackId: track.id });
+      };
+      track.onunmute = () => {
+        logger.info('Screen', 'локальный трек размьючен', { trackId: track.id });
       };
 
       screenTransceiversRef.current.forEach((tr) => {
@@ -536,11 +592,12 @@ function App() {
           enc.maxFramerate = 60;
           enc.scaleResolutionDownBy = 1;
           // пробуем многослойность, если поддерживается (VP9/AV1)
-          if (!(enc as any).scalabilityMode) {
-            (enc as any).scalabilityMode = 'L3T3_KEY';
+          const encoding = enc as RTCRtpEncodingParameters & { scalabilityMode?: string };
+          if (!encoding.scalabilityMode) {
+            encoding.scalabilityMode = 'L3T3_KEY';
           }
         });
-        (params as any).degradationPreference = 'maintain-framerate';
+        params.degradationPreference = 'maintain-framerate';
         sender.setParameters(params).catch(() => {});
         sender.replaceTrack(track).catch(() => {});
         tr.direction = 'sendrecv';
@@ -555,9 +612,9 @@ function App() {
       screenSharerIdRef.current = selfIdRef.current;
       setUsers((prev) => prev.map((u) => (u.id === selfIdRef.current ? { ...u, isScreenSharer: true } : u)));
     } catch (err) {
-      logger.error('Screen', 'getDisplayMedia failed', { err });
+      logger.error('Screen', 'ошибка getDisplayMedia', { err });
     }
-  }, [renegotiatePeer, stopScreenShareInternal]);
+  }, [scheduleRenegotiate, stopScreenShareInternal]);
 
   const toggleScreenShare = useCallback(() => {
     if (screenSharerIdRef.current === selfIdRef.current && screenStreamRef.current) {
@@ -565,7 +622,7 @@ function App() {
     } else {
       startScreenShare();
     }
-  }, [selfIdRef.current, startScreenShare, stopScreenShareInternal]);
+  }, [startScreenShare, stopScreenShareInternal]);
 
   const toggleHand = useCallback(() => {
     const next = !selfHandRaised;
@@ -677,7 +734,7 @@ function App() {
 
   const openScreenOverlay = useCallback(
     (peerId: string) => {
-      logger.info('Screen', 'openScreenOverlay click', {
+      logger.info('Screen', 'клик открытия оверлея экрана', {
         peerId,
         hasStream: !!screenStreamsRef.current.get(peerId)
       });
@@ -696,7 +753,7 @@ function App() {
         });
       }
     },
-    [attachScreen, renegotiatePeer, waitForScreenStream]
+    [attachScreen, scheduleRenegotiate, waitForScreenStream]
   );
 
   useEffect(() => {
@@ -759,6 +816,14 @@ function App() {
           await createPeerConnection(u.id, true);
         }
       }
+      if (sharer && sharer !== meId) {
+        const tx = screenTransceiversRef.current.get(sharer);
+        if (tx) tx.direction = 'recvonly';
+        if (!screenReadyRef.current[sharer]) {
+          screenReadyRef.current[sharer] = false;
+          setScreenReady((prev) => ({ ...prev, [sharer]: false }));
+        }
+      }
       for (const peerId of Array.from(pcsRef.current.keys())) {
         if (!us.find((u) => u.id === peerId)) {
           cleanupPeer(peerId);
@@ -777,7 +842,7 @@ function App() {
       setScreenSharerId(userId);
       setUsers((prev) => prev.map((u) => ({ ...u, isScreenSharer: u.id === userId })));
       if (userId === null) {
-        logger.info('Screen', 'screenSharer stopped');
+        logger.info('Screen', 'демонстрация экрана остановлена');
         setScreenOverlayOpen(false);
         setScreenOverlayPeerId(null);
         setScreenOverlayLoading(false);
@@ -785,7 +850,7 @@ function App() {
         setScreenReady({});
         if (screenOverlayVideoRef.current) screenOverlayVideoRef.current.srcObject = null;
       } else if (userId !== selfIdRef.current) {
-        logger.info('Screen', 'screenSharer started (remote)', { userId });
+        logger.info('Screen', 'демонстрация экрана начата (удаленно)', { userId });
         screenReadyRef.current[userId] = false;
         setScreenReady((prev) => ({ ...prev, [userId]: false }));
         const stream = screenStreamsRef.current.get(userId);
@@ -796,7 +861,6 @@ function App() {
         const pc = pcsRef.current.get(userId);
         const tx = screenTransceiversRef.current.get(userId);
         if (tx) tx.direction = 'recvonly';
-        if (pc) scheduleRenegotiate(userId, pc);
         // не авто-открываем окно — ждём ручного клика “Смотреть”
       }
     });
@@ -811,6 +875,7 @@ function App() {
       client.listMeetings();
     });
     const unsubClose = client.on('close', () => {
+      logger.warn('WS', 'соединение закрыто');
       setIsWsReady(false);
       stopScreenShareInternal();
       setLocalMuteState(true);

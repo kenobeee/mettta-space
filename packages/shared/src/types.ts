@@ -10,6 +10,14 @@ export type ChatMessage = {
   text: string;
   createdAt: string;
 };
+export type Meeting = {
+  id: string;
+  lobbyId: string;
+  title: string;
+  startsAt: string;
+  durationMin: number;
+  createdAt: string;
+};
 
 export type ClientMessage =
   | { type: 'clientInfo'; deviceId: string }
@@ -17,6 +25,10 @@ export type ClientMessage =
   | { type: 'joinLobby'; lobbyId: string }
   | { type: 'leaveLobby' }
   | { type: 'chat'; text: string }
+  | { type: 'listMeetings' }
+  | { type: 'createMeeting'; meeting: { title: string; startsAt: string; durationMin: number } }
+  | { type: 'updateMeeting'; meeting: { id: string; title: string; startsAt: string; durationMin: number } }
+  | { type: 'deleteMeeting'; id: string }
   | { type: 'status'; muted: boolean }
   | { type: 'screenShare'; action: 'start' | 'stop' }
   | { type: 'hand'; raised: boolean }
@@ -29,6 +41,7 @@ export type ServerMessage =
   | { type: 'lobbyState'; lobbyId: string; users: LobbyUser[] }
   | { type: 'chatHistory'; lobbyId: string; messages: ChatMessage[] }
   | { type: 'chat'; message: ChatMessage }
+  | { type: 'meetings'; meetings: Meeting[] }
   | { type: 'signal'; from: string; payload: unknown }
   | { type: 'userStatus'; userId: string; muted: boolean }
   | { type: 'screenSharer'; userId: string | null }
@@ -43,6 +56,7 @@ export type ChatEvents = {
   lobbyState: { lobbyId: string; users: LobbyUser[] };
   chatHistory: { lobbyId: string; messages: ChatMessage[] };
   chat: ChatMessage;
+  meetings: Meeting[];
   signal: { from: string; payload: unknown };
   userStatus: { userId: string; muted: boolean };
   screenSharer: { userId: string | null };
