@@ -64,12 +64,20 @@ export const createRenegotiator = ({
         scheduleRenegotiate(peerId, pc);
         return;
       }
-      await pc.setLocalDescription(await pc.createOffer());
+      const offer = await pc.createOffer();
+      if (pc.signalingState !== 'stable') {
+        logger.warn('WebRTC', 'Signaling no longer stable after createOffer, skipping setLocalDescription', { peerId, state: pc.signalingState });
+        return;
+      }
+      await pc.setLocalDescription(offer);
       clientRef.current?.sendSignalTo(peerId, { sdp: pc.localDescription });
     } catch (err) {
-      logger.error('WebRTC', 'Renegotiation failed', { peerId, err });
-      if ((err as any)?.name === 'InvalidStateError' || pc.signalingState !== 'stable') {
+      const errorName = (err as any)?.name || (err as any)?.code;
+      if (errorName === 'InvalidStateError' || pc.signalingState !== 'stable') {
+        logger.warn('WebRTC', 'Renegotiation failed due to state change, rescheduling', { peerId, state: pc.signalingState });
         scheduleRenegotiate(peerId, pc);
+      } else {
+        logger.error('WebRTC', 'Renegotiation failed', { peerId, err });
       }
     } finally {
       makingOfferRef.current.set(peerId, false);

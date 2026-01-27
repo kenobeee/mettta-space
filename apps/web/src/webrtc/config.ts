@@ -4,8 +4,15 @@ const ICE_SERVERS: RTCIceServer[] = (() => {
     .map((s: string) => s.trim())
     .filter((s: string): s is string => Boolean(s));
 
-  const defaultStun = ['stun:mettta.space:3478'];
-  const defaultTurn = ['turn:mettta.space:3478?transport=udp'];
+  const defaultStun = [
+    'stun:stun.l.google.com:19302',
+    'stun:stun1.l.google.com:19302',
+    'stun:mettta.space:3478'
+  ];
+  const defaultTurn = [
+    'turn:mettta.space:3478?transport=udp',
+    'turn:mettta.space:3478?transport=tcp'
+  ];
 
   const stunUrls = urlsEnv.filter((u: string) => u.startsWith('stun:'));
   const turnUrls = urlsEnv.filter((u: string) => u.startsWith('turn:'));

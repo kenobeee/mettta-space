@@ -418,9 +418,17 @@ function App() {
         pc = await createPeerConnection(from, false);
       }
       if (!pc) return;
+      const polite = selfIdRef.current < from;
       if (payload.sdp) {
         const offerCollision =
           payload.sdp.type === 'offer' && (makingOfferRef.current.get(from) || pc.signalingState !== 'stable');
+        
+        ignoreOfferRef.current.set(from, !polite && offerCollision);
+        if (ignoreOfferRef.current.get(from)) {
+          logger.warn('WebRTC', 'Ignore offer collision (impolite)', { from });
+          return;
+        }
+
         if (offerCollision && pc.signalingState !== 'stable') {
           try {
             await pc.setLocalDescription({ type: 'rollback', sdp: undefined });
@@ -428,11 +436,10 @@ function App() {
             logger.error('WebRTC', 'rollback failed', { err });
           }
         }
-        ignoreOfferRef.current.set(from, false);
+        
         settingRemoteAnswerRef.current.set(from, payload.sdp.type === 'answer');
         try {
           if (payload.sdp.type === 'answer' && pc.signalingState !== 'have-local-offer') {
-            // Ответ пришёл, но локального оффера нет — игнор, чтобы не словить InvalidState
             settingRemoteAnswerRef.current.set(from, false);
             return;
           }
@@ -447,6 +454,10 @@ function App() {
         if (payload.sdp.type === 'offer') {
           try {
             const answer = await pc.createAnswer();
+            if (pc.signalingState !== 'have-remote-offer') {
+              logger.warn('WebRTC', 'Signaling state changed before setLocalDescription(answer)', { state: pc.signalingState });
+              return;
+            }
             await pc.setLocalDescription(answer);
             clientRef.current?.sendSignalTo(from, { sdp: pc.localDescription });
           } catch (err) {
