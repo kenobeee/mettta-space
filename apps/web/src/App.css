@@ -77,30 +77,6 @@
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
 }
 
-.downloads {
-  display: flex;
-  gap: 10px;
-}
-
-.dl-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  color: #111827;
-  text-decoration: none;
-  font-weight: 700;
-  font-size: 13px;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-}
-
-.dl-btn:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.18);
-}
 
 .layout {
   display: grid;
@@ -264,9 +240,9 @@
   position: relative;
   box-shadow: 0 10px 32px rgba(15, 23, 42, 0.12);
   width: 100%;
-  height: 100%;
   aspect-ratio: 1 / 1;
   align-content: flex-start;
+  align-self: start;
 }
 
 .participant.me {
@@ -771,7 +747,7 @@ button {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 420px;
   gap: 14px;
   align-items: stretch;
   height: 100%;
@@ -793,56 +769,6 @@ button {
   height: 100%;
 }
 
-.calendar-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  background: #f8fafc;
-}
-
-.calendar-form-title {
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.calendar-form-row {
-  display: grid;
-  grid-template-columns: 1.4fr 0.9fr 0.9fr 0.8fr auto auto;
-  gap: 10px;
-}
-
-.calendar-form input,
-.calendar-form select {
-  border-radius: 10px;
-  border: 1px solid #e5e7eb;
-  padding: 8px 10px;
-  font-size: 13px;
-  background: #fff;
-}
-
-.calendar-form button {
-  border: none;
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6b7bff, #8e9bff);
-  color: #fff;
-  cursor: pointer;
-}
-
-.calendar-form button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.calendar-form button.ghost {
-  background: #ffffff;
-  color: #475569;
-  border: 1px solid #e2e8f0;
-}
 
 .calendar-weekdays {
   display: grid;
@@ -992,15 +918,16 @@ button {
   border-radius: 10px;
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.12);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
   overflow: hidden;
 }
 
-.calendar-timeline-event-time {
-  font-size: 12px;
-  font-weight: 700;
-  color: #4f46e5;
+.calendar-timeline-event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: space-between;
 }
 
 .calendar-timeline-event-title {
@@ -1010,6 +937,8 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
 }
 
 .calendar-timeline-event-actions {
@@ -1017,26 +946,29 @@ button {
   gap: 6px;
 }
 
-.calendar-timeline-event-actions .ghost,
-.calendar-timeline-event-actions .danger {
+.calendar-timeline-event-actions .icon-btn {
+  width: 26px;
+  height: 26px;
   border-radius: 8px;
-  padding: 4px 8px;
-  font-weight: 700;
-  font-size: 11px;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.calendar-timeline-event-actions .ghost {
+  border: 1px solid #e2e8f0;
   background: #ffffff;
   color: #475569;
-  border-color: #e2e8f0;
+  font-weight: 700;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.calendar-timeline-event-actions .danger {
+.calendar-timeline-event-actions .icon-btn.danger {
   background: #fee2e2;
   color: #b91c1c;
   border-color: #fecaca;
+}
+
+.calendar-timeline-event-actions .icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .calendar-list-item {
@@ -1196,6 +1128,31 @@ button {
   box-shadow: 0 16px 32px rgba(15, 23, 42, 0.2);
 }
 
+.modal-tabs {
+  display: flex;
+  gap: 8px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 4px;
+  border: 1px solid #e2e8f0;
+}
+
+.modal-tab {
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+  color: #475569;
+}
+
+.modal-tab.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+}
+
 .modal-card input,
 .modal-card select {
   border-radius: 10px;
@@ -1230,13 +1187,6 @@ button {
   border-radius: 10px;
   padding: 8px 12px;
   font-weight: 700;
-}
-
-.footer {
-  width: calc(100% - 32px);
-  margin: 0 auto 16px;
-  display: flex;
-  justify-content: center;
 }
 
 /* Mobile layout */
@@ -1311,9 +1261,6 @@ button {
     gap: 6px;
   }
 
-  .calendar-form-row {
-    grid-template-columns: 1fr;
-  }
 
   .calendar-list-item {
     flex-direction: column;

@@ -87,10 +87,24 @@ function App() {
   const [view, setView] = useState<'calendar' | 'meetings'>('meetings');
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [now, setNow] = useState(() => new Date());
-  const [quickModalOpen, setQuickModalOpen] = useState(false);
-  const [quickTitle, setQuickTitle] = useState('');
-  const [quickDurationMin, setQuickDurationMin] = useState(30);
-  const isDesktopEnv = typeof window !== 'undefined' && window.location.protocol === 'app:';
+  const [meetingModalOpen, setMeetingModalOpen] = useState(false);
+  const [meetingModalTab, setMeetingModalTab] = useState<'schedule' | 'now'>('schedule');
+  const [meetingTitle, setMeetingTitle] = useState('');
+  const [meetingDate, setMeetingDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  });
+  const [meetingTime, setMeetingTime] = useState(() => {
+    const d = new Date();
+    const h = `${d.getHours()}`.padStart(2, '0');
+    const m = `${Math.floor(d.getMinutes() / 5) * 5}`.padStart(2, '0');
+    return `${h}:${m}`;
+  });
+  const [meetingDurationMin, setMeetingDurationMin] = useState(30);
+  const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
   const [selfMuted, setSelfMuted] = useState(true);
   const [selfHandRaised, setSelfHandRaised] = useState(false);
   const [screenSharerId, setScreenSharerId] = useState<string | null>(null);
@@ -643,6 +657,105 @@ function App() {
     clientRef.current?.deleteMeeting(id);
   }, []);
 
+  const openCreateModal = useCallback(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    const h = `${d.getHours()}`.padStart(2, '0');
+    const mm = `${Math.floor(d.getMinutes() / 5) * 5}`.padStart(2, '0');
+    setEditingMeetingId(null);
+    setMeetingModalTab('schedule');
+    setMeetingTitle('');
+    setMeetingDate(`${y}-${m}-${day}`);
+    setMeetingTime(`${h}:${mm}`);
+    setMeetingDurationMin(30);
+    setMeetingModalOpen(true);
+  }, []);
+
+  const openEditModal = useCallback((meeting: Meeting) => {
+    const start = new Date(meeting.startsAt);
+    const y = start.getFullYear();
+    const m = `${start.getMonth() + 1}`.padStart(2, '0');
+    const day = `${start.getDate()}`.padStart(2, '0');
+    const h = `${start.getHours()}`.padStart(2, '0');
+    const mm = `${start.getMinutes()}`.padStart(2, '0');
+    setEditingMeetingId(meeting.id);
+    setMeetingTitle(meeting.title);
+    setMeetingDate(`${y}-${m}-${day}`);
+    setMeetingTime(`${h}:${mm}`);
+    setMeetingDurationMin(meeting.durationMin);
+    setMeetingModalOpen(true);
+  }, []);
+
+  const closeMeetingModal = useCallback(() => {
+    setMeetingModalOpen(false);
+  }, []);
+
+  const acceptMeeting = useCallback(() => {
+    const title = meetingTitle.trim();
+    if (!title) return;
+    if (editingMeetingId) {
+      const [year, month, day] = meetingDate.split('-').map(Number);
+      const [hour, minute] = meetingTime.split(':').map(Number);
+      const startsAt = new Date(
+        Number.isFinite(year) ? year : 0,
+        Number.isFinite(month) ? month - 1 : 0,
+        Number.isFinite(day) ? day : 1,
+        Number.isFinite(hour) ? hour : 0,
+        Number.isFinite(minute) ? minute : 0
+      );
+      handleUpdateMeeting({
+        id: editingMeetingId,
+        title,
+        startsAt: startsAt.toISOString(),
+        durationMin: meetingDurationMin
+      });
+      setEditingMeetingId(null);
+      setMeetingModalOpen(false);
+      return;
+    }
+
+    if (meetingModalTab === 'now') {
+      handleCreateMeeting({
+        title,
+        startsAt: new Date(Date.now() - 1000).toISOString(),
+        durationMin: meetingDurationMin
+      });
+      setMeetingTitle('');
+      setMeetingDurationMin(30);
+      setMeetingModalOpen(false);
+      return;
+    }
+
+    const [year, month, day] = meetingDate.split('-').map(Number);
+    const [hour, minute] = meetingTime.split(':').map(Number);
+    const startsAt = new Date(
+      Number.isFinite(year) ? year : 0,
+      Number.isFinite(month) ? month - 1 : 0,
+      Number.isFinite(day) ? day : 1,
+      Number.isFinite(hour) ? hour : 0,
+      Number.isFinite(minute) ? minute : 0
+    );
+    handleCreateMeeting({
+      title,
+      startsAt: startsAt.toISOString(),
+      durationMin: meetingDurationMin
+    });
+    setMeetingTitle('');
+    setMeetingDurationMin(30);
+    setMeetingModalOpen(false);
+  }, [
+    editingMeetingId,
+    handleCreateMeeting,
+    handleUpdateMeeting,
+    meetingDate,
+    meetingDurationMin,
+    meetingModalTab,
+    meetingTime,
+    meetingTitle
+  ]);
+
   const meetingMetaByLobby = useMemo(() => {
     const meta: Record<string, { label: string; disableJoin: boolean }> = {};
     for (const lobby of lobbies) {
@@ -883,8 +996,8 @@ function App() {
           </button>
         </div>
         <div className="header-actions">
-          <button className="quick-btn" onClick={() => setQuickModalOpen(true)}>
-            Быстрый запуск
+          <button className="quick-btn" onClick={openCreateModal}>
+            Создать встречу
           </button>
         </div>
       </div>
@@ -892,9 +1005,9 @@ function App() {
         {view === 'calendar' ? (
           <CalendarView
             meetings={meetings}
-            onCreateMeeting={handleCreateMeeting}
-            onUpdateMeeting={handleUpdateMeeting}
+            now={now}
             onDeleteMeeting={handleDeleteMeeting}
+            onEditMeeting={openEditModal}
           />
         ) : (
           <>
@@ -984,18 +1097,52 @@ function App() {
         </div>
       )}
       {lastError && <div className="error">Ошибка: {lastError}</div>}
-      {quickModalOpen && (
+      {meetingModalOpen && (
         <div className="modal">
-          <div className="modal-backdrop" onClick={() => setQuickModalOpen(false)} />
+          <div className="modal-backdrop" onClick={closeMeetingModal} />
           <div className="modal-card">
-            <div className="modal-title">Быстрый запуск встречи</div>
+            <div className="modal-title">{editingMeetingId ? 'Редактировать встречу' : 'Создать встречу'}</div>
+            {!editingMeetingId && (
+              <div className="modal-tabs">
+                <button
+                  className={`modal-tab ${meetingModalTab === 'schedule' ? 'active' : ''}`}
+                  onClick={() => setMeetingModalTab('schedule')}
+                >
+                  Запланировать
+                </button>
+                <button
+                  className={`modal-tab ${meetingModalTab === 'now' ? 'active' : ''}`}
+                  onClick={() => setMeetingModalTab('now')}
+                >
+                  Сейчас
+                </button>
+              </div>
+            )}
             <input
               type="text"
               placeholder="Название"
-              value={quickTitle}
-              onChange={(event) => setQuickTitle(event.target.value)}
+              value={meetingTitle}
+              onChange={(event) => setMeetingTitle(event.target.value)}
             />
-            <select value={quickDurationMin} onChange={(event) => setQuickDurationMin(Number(event.target.value))}>
+            {(editingMeetingId || meetingModalTab === 'schedule') && (
+              <>
+                <input
+                  type="date"
+                  value={meetingDate}
+                  onChange={(event) => setMeetingDate(event.target.value)}
+                />
+                <input
+                  type="time"
+                  value={meetingTime}
+                  step={900}
+                  onChange={(event) => setMeetingTime(event.target.value)}
+                />
+              </>
+            )}
+            <select
+              value={meetingDurationMin}
+              onChange={(event) => setMeetingDurationMin(Number(event.target.value))}
+            >
               {[15, 30, 45, 60, 90, 120].map((value) => (
                 <option key={value} value={value}>
                   {value} мин
@@ -1004,35 +1151,14 @@ function App() {
               <option value={0}>Без лимита</option>
             </select>
             <div className="modal-actions">
-              <button
-                className="primary"
-                onClick={() => {
-                  const title = quickTitle.trim();
-                  if (!title) return;
-                  handleCreateMeeting({
-                    title,
-                    startsAt: new Date().toISOString(),
-                    durationMin: quickDurationMin
-                  });
-                  setQuickTitle('');
-                  setQuickDurationMin(30);
-                  setQuickModalOpen(false);
-                }}
-              >
-                Создать
+              <button className="primary" onClick={acceptMeeting} disabled={!meetingTitle.trim()}>
+                Принять
               </button>
-              <button className="ghost" onClick={() => setQuickModalOpen(false)}>
+              <button className="ghost" onClick={closeMeetingModal}>
                 Отмена
               </button>
             </div>
           </div>
-        </div>
-      )}
-      {!isDesktopEnv && (
-        <div className="footer">
-          <a href="https://mettta.space/downloads/metttaspace-mac.dmg" className="dl-btn" download>
-            macOS
-          </a>
         </div>
       )}
     </div>

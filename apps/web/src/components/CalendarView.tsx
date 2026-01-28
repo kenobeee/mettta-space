@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Meeting } from '@chat/shared';
 
 const WEEK_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -36,23 +36,6 @@ const formatDateLabel = (key: string) => {
   return `${dd}.${mm}.${year}`;
 };
 
-const parseTimeLabel = (value: string) => {
-  const match = value.match(/^(\d{1,2}):(\d{1,2})$/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return { hour, minute };
-};
-
-const formatTimeLabel = (value: string) => {
-  const [hour, minute] = value.split(':').map(Number);
-  const hh = Number.isFinite(hour) ? String(hour).padStart(2, '0') : '00';
-  const mm = Number.isFinite(minute) ? String(minute).padStart(2, '0') : '00';
-  return `${hh}:${mm}`;
-};
-
 const buildCalendar = (date: Date) => {
   const year = date.getFullYear();
   const month = date.getMonth();
@@ -85,22 +68,18 @@ const buildCalendar = (date: Date) => {
 
 type Props = {
   meetings: Meeting[];
-  onCreateMeeting: (meeting: { title: string; startsAt: string; durationMin: number }) => void;
-  onUpdateMeeting: (meeting: { id: string; title: string; startsAt: string; durationMin: number }) => void;
+  now: Date;
   onDeleteMeeting: (id: string) => void;
+  onEditMeeting: (meeting: Meeting) => void;
 };
 
 const formatTime = (date: Date) =>
   date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
-export function CalendarView({ meetings, onCreateMeeting, onUpdateMeeting, onDeleteMeeting }: Props) {
+export function CalendarView({ meetings, now, onDeleteMeeting, onEditMeeting }: Props) {
   const today = new Date();
   const [currentMonth, setCurrentMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));
-  const [title, setTitle] = useState('');
-  const [time, setTime] = useState('10:00');
-  const [durationMin, setDurationMin] = useState(30);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const cells = buildCalendar(currentMonth);
   const monthLabel = `${MONTH_NAMES[currentMonth.getMonth()]} ${currentMonth.getFullYear()}`;
 
@@ -115,45 +94,20 @@ export function CalendarView({ meetings, onCreateMeeting, onUpdateMeeting, onDel
     return map;
   }, [meetings]);
 
-  const { year, month, day } = useMemo(() => parseDateKey(selectedDate), [selectedDate]);
-
-  const handleCreate = () => {
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle) return;
-    const parsed = parseTimeLabel(time) ?? { hour: 10, minute: 0 };
-    const startsAt = new Date(year, month - 1, day, parsed.hour, parsed.minute);
-    const payload = {
-      title: trimmedTitle,
-      startsAt: startsAt.toISOString(),
-      durationMin
-    };
-    if (editingId) {
-      onUpdateMeeting({ id: editingId, ...payload });
-    } else {
-      onCreateMeeting(payload);
-    }
-    setTitle('');
-    setEditingId(null);
-  };
-
   const selectedMeetings = useMemo(() => {
     const items = eventsByDate.get(selectedDate) ?? [];
     return items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
   }, [eventsByDate, selectedDate]);
 
-  const startEdit = (meeting: Meeting) => {
-    setEditingId(meeting.id);
-    setTitle(meeting.title);
-    const start = new Date(meeting.startsAt);
-    setSelectedDate(toDateKey(start));
-    setTime(formatTimeLabel(`${start.getHours()}:${start.getMinutes()}`));
-    setDurationMin(meeting.durationMin);
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setTitle('');
-  };
+  const isMeetingActive = useCallback(
+    (meeting: Meeting) => {
+      const start = new Date(meeting.startsAt).getTime();
+      const end = meeting.durationMin === 0 ? Number.POSITIVE_INFINITY : start + meeting.durationMin * 60_000;
+      const current = now.getTime();
+      return current >= start && current <= end;
+    },
+    [now]
+  );
 
   return (
     <div className="calendar">
@@ -179,44 +133,6 @@ export function CalendarView({ meetings, onCreateMeeting, onUpdateMeeting, onDel
           >
             ›
           </button>
-        </div>
-      </div>
-      <div className="calendar-form">
-        <div className="calendar-form-title">{editingId ? 'Редактировать встречу' : 'Новая встреча'}</div>
-        <div className="calendar-form-row">
-          <input
-            type="text"
-            placeholder="Название"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-          />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(event) => setSelectedDate(event.target.value)}
-          />
-          <input
-            type="time"
-            value={time}
-            step={900}
-            onChange={(event) => setTime(event.target.value)}
-          />
-          <select value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))}>
-            {[15, 30, 45, 60, 90, 120].map((value) => (
-              <option key={value} value={value}>
-                {value} мин
-              </option>
-            ))}
-            <option value={0}>Без лимита</option>
-          </select>
-          <button onClick={handleCreate} disabled={!title.trim()}>
-            {editingId ? 'Сохранить' : 'Добавить'}
-          </button>
-          {editingId && (
-            <button className="ghost" onClick={cancelEdit}>
-              Отмена
-            </button>
-          )}
         </div>
       </div>
       <div className="calendar-content">
@@ -283,21 +199,33 @@ export function CalendarView({ meetings, onCreateMeeting, onUpdateMeeting, onDel
                   const duration = meeting.durationMin === 0 ? 1440 - minutesFromStart : meeting.durationMin;
                   const top = (minutesFromStart / 1440) * 100;
                   const height = Math.max((duration / 1440) * 100, 4);
+                  const isActive = isMeetingActive(meeting);
                   return (
                     <div
                       key={meeting.id}
                       className="calendar-timeline-event"
                       style={{ top: `${top}%`, height: `${height}%` }}
                     >
-                      <div className="calendar-timeline-event-time">{formatTime(start)}</div>
-                      <div className="calendar-timeline-event-title">{meeting.title}</div>
-                      <div className="calendar-timeline-event-actions">
-                        <button className="ghost" onClick={() => startEdit(meeting)}>
-                          Изменить
-                        </button>
-                        <button className="danger" onClick={() => onDeleteMeeting(meeting.id)}>
-                          Удалить
-                        </button>
+                      <div className="calendar-timeline-event-row">
+                        <div className="calendar-timeline-event-title">{meeting.title}</div>
+                        <div className="calendar-timeline-event-actions">
+                          <button
+                            className="icon-btn"
+                            onClick={() => onEditMeeting(meeting)}
+                            aria-label="Редактировать"
+                            title={isActive ? 'Идущую встречу нельзя редактировать' : 'Редактировать'}
+                            disabled={isActive}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="icon-btn danger"
+                            onClick={() => onDeleteMeeting(meeting.id)}
+                            aria-label="Удалить"
+                          >
+                            🗑️
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
