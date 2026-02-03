@@ -21,12 +21,12 @@ jobs:
             exit 1
           fi
 
-      - name: Set signing identity (no certificate)
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 == '' }}
+      - name: Init signing identity
         run: echo "CERT_IDENTITY=" >> $GITHUB_ENV
 
       - name: Import Apple Developer certificate
         if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        continue-on-error: true
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

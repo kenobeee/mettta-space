@@ -19,10 +19,19 @@ type SignalPayload = {
   candidate?: RTCIceCandidateInit;
 };
 
-  const DESKTOP_WS_FALLBACK = import.meta.env.VITE_DESKTOP_WS_URL ?? 'wss://mettta.space/ws';
+const DESKTOP_WS_FALLBACK = import.meta.env.VITE_DESKTOP_WS_URL ?? 'wss://mettta.space/ws';
+
+function isDesktopApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  if ((window as any).__TAURI__ !== undefined) return true;
+  if (window.location.protocol === 'app:') return true;
+  if (window.location.hostname === 'asset.localhost') return true;
+  return false;
+}
+
 const WS_URL =
   import.meta.env.VITE_WS_URL ??
-  (window.location.protocol === 'app:'
+  (isDesktopApp()
     ? DESKTOP_WS_FALLBACK
     : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
 
