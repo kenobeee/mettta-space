@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npx vite",
-    "build": "npx tsc -b && npx vite build",
+    "build": "npx --package=typescript tsc -b && npx vite build",
     "lint": "npx eslint .",
     "preview": "npx vite preview"
   },
