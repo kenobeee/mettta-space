@@ -46,3 +46,9 @@ jobs:
         with:
           name: metttaspace-Windows-installer
           path: apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          "## Установщик Windows собран" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "Скачайте артефакт **metttaspace-Windows-installer** (exe)." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
