@@ -2,7 +2,7 @@
   "name": "chat",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal audio chat stack: web (Vite+React+TS), server (Node+WS), desktop (Electron).",
+  "description": "Minimal audio chat stack: web (Vite+React+TS), server (Node+WS), desktop (Tauri).",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -23,7 +23,9 @@
     "dev:server": "npm --workspace server run dev",
     "start:server": "npm --workspace server run start",
     "dev:desktop": "npm --workspace desktop run dev",
-    "build:desktop": "npm --workspace web run build && npm --workspace desktop run build:installers"
+    "build:desktop": "npm --workspace desktop run build",
+    "build:desktop:macos": "npm --workspace desktop run build:macos",
+    "build:desktop:windows": "npm --workspace desktop run build:windows"
   },
   "devDependencies": {}
 }

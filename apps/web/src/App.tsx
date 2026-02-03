@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import './App.css';
 import { LobbyList } from './components/LobbyList';
 import { ParticipantsGrid } from './components/ParticipantsGrid';
@@ -6,7 +7,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { CalendarView } from './components/CalendarView';
 import { useChatStore } from './store/useChatStore';
 import { ChatClient } from '@chat/shared';
-import type { ChatMessage, LobbyInfo, LobbyUser, Meeting } from '@chat/shared';
+import type { ChatMessage, ChatRoom, ChatRoomMessage, LobbyInfo, LobbyUser, Meeting } from '@chat/shared';
 import { logger } from './utils/logger';
 import { ICE_SERVERS, SCREEN_CONSTRAINTS_60 } from './webrtc/config';
 import { ensureLocalAudio } from './webrtc/media';
@@ -26,6 +27,7 @@ const WS_URL =
     : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`);
 
 const FORCE_RELAY = (import.meta.env.VITE_FORCE_RELAY ?? '0') === '1';
+const AUTH_TOKEN_KEY = 'mira_auth_token';
 
 const isSameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -84,7 +86,7 @@ function App() {
   const [users, setUsers] = useState<LobbyUser[]>([]);
   const [chatByLobby, setChatByLobby] = useState<Record<string, ChatMessage[]>>({});
   const [chatInput, setChatInput] = useState('');
-  const [view, setView] = useState<'calendar' | 'meetings'>('meetings');
+  const [view, setView] = useState<'calendar' | 'meetings' | 'chats'>('meetings');
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [now, setNow] = useState(() => new Date());
   const [meetingModalOpen, setMeetingModalOpen] = useState(false);
@@ -115,6 +117,18 @@ function App() {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const [screenOverlayLoading, setScreenOverlayLoading] = useState(false);
   const [screenReady, setScreenReady] = useState<Record<string, boolean>>({});
+  const [authModalOpen, setAuthModalOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return !localStorage.getItem(AUTH_TOKEN_KEY);
+  });
+  const [authFirstName, setAuthFirstName] = useState('');
+  const [authLastName, setAuthLastName] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
+  const [activeChatRoom, setActiveChatRoom] = useState<string | null>(null);
+  const [chatRoomMessages, setChatRoomMessages] = useState<Record<string, ChatRoomMessage[]>>({});
+  const [chatRoomInput, setChatRoomInput] = useState('');
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const deviceIdRef = useRef<string>(getDeviceId());
 
@@ -657,6 +671,57 @@ function App() {
     clientRef.current?.deleteMeeting(id);
   }, []);
 
+  const handleAuthSubmit = useCallback(() => {
+    const firstName = authFirstName.trim();
+    const lastName = authLastName.trim();
+    if (!firstName || !lastName) {
+      setAuthError('Введите имя и фамилию');
+      return;
+    }
+    setAuthError('');
+    clientRef.current?.register(firstName, lastName);
+  }, [authFirstName, authLastName]);
+
+  const selectChatRoom = useCallback((roomId: string) => {
+    setActiveChatRoom(roomId);
+    clientRef.current?.joinChatRoom(roomId);
+  }, []);
+
+  const handleSendChatRoom = useCallback(() => {
+    if (!activeChatRoom) return;
+    const text = chatRoomInput.trim();
+    if (!text) return;
+    clientRef.current?.sendChatRoomMessage(activeChatRoom, text);
+    setChatRoomInput('');
+  }, [activeChatRoom, chatRoomInput]);
+
+  const handleChatFileSelect = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (!activeChatRoom) return;
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) {
+        setError('Файл слишком большой (макс. 5 МБ)');
+        event.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!dataUrl) return;
+        clientRef.current?.sendChatRoomFile(activeChatRoom, {
+          fileName: file.name,
+          fileType: file.type || 'application/octet-stream',
+          fileSize: file.size,
+          dataUrl
+        });
+        event.target.value = '';
+      };
+      reader.readAsDataURL(file);
+    },
+    [activeChatRoom, setError]
+  );
+
   const openCreateModal = useCallback(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -846,6 +911,25 @@ function App() {
         return { ...prev, [message.lobbyId]: next };
       });
     });
+    const unsubChatRooms = client.on('chatRooms', (rooms) => {
+      setChatRooms(rooms);
+      if (rooms.length && (!activeChatRoom || !rooms.find((r) => r.id === activeChatRoom))) {
+        const first = rooms[0].id;
+        setActiveChatRoom(first);
+        client.joinChatRoom(first);
+      }
+    });
+    const unsubChatRoomHistory = client.on('chatRoomHistory', ({ roomId, messages }) => {
+      setChatRoomMessages((prev) => ({ ...prev, [roomId]: messages }));
+    });
+    const unsubChatRoomMessage = client.on('chatRoomMessage', (message) => {
+      setChatRoomMessages((prev) => {
+        const list = prev[message.roomId] ?? [];
+        const next = [...list, message];
+        if (next.length > 200) next.splice(0, next.length - 200);
+        return { ...prev, [message.roomId]: next };
+      });
+    });
     const unsubLobbyState = client.on('lobbyState', async ({ lobbyId: lid, users: us }) => {
       setLobbyId(lid);
       setUsers(us);
@@ -928,11 +1012,32 @@ function App() {
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, handRaised: raised } : u)));
       if (userId === selfIdRef.current) setSelfHandRaised(raised);
     });
-    const unsubOpen = client.on('open', () => {
-      setIsWsReady(true);
+    const unsubAuthOk = client.on('authOk', ({ token }) => {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+      }
+      setAuthModalOpen(false);
+      setAuthError('');
       client.sendDevice(deviceIdRef.current);
       client.listLobbies();
       client.listMeetings();
+      client.listChatRooms();
+    });
+    const unsubAuthError = client.on('authError', (message) => {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+      setAuthModalOpen(true);
+      setAuthError(message);
+    });
+    const unsubOpen = client.on('open', () => {
+      setIsWsReady(true);
+      const storedToken = typeof window !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_KEY) : null;
+      if (storedToken) {
+        client.auth(storedToken);
+      } else {
+        setAuthModalOpen(true);
+      }
     });
     const unsubClose = client.on('close', () => {
       setIsWsReady(false);
@@ -950,11 +1055,16 @@ function App() {
       unsubMeetings();
       unsubChatHistory();
       unsubChat();
+      unsubChatRooms();
+      unsubChatRoomHistory();
+      unsubChatRoomMessage();
       unsubLobbyState();
       unsubSignal();
       unsubStatus();
       unsubScreenSharer();
       unsubHand();
+      unsubAuthOk();
+      unsubAuthError();
       unsubOpen();
       unsubClose();
       unsubError();
@@ -963,6 +1073,7 @@ function App() {
       client.disconnect();
     };
   }, [
+    activeChatRoom,
     attachScreen,
     cleanupAll,
     cleanupPeer,
@@ -988,11 +1099,11 @@ function App() {
           >
             календарь
           </button>
-          <button
-            className={`tab ${view === 'meetings' ? 'active' : ''}`}
-            onClick={() => setView('meetings')}
-          >
+          <button className={`tab ${view === 'meetings' ? 'active' : ''}`} onClick={() => setView('meetings')}>
             встречи
+          </button>
+          <button className={`tab ${view === 'chats' ? 'active' : ''}`} onClick={() => setView('chats')}>
+            чаты
           </button>
         </div>
         <div className="header-actions">
@@ -1001,15 +1112,16 @@ function App() {
           </button>
         </div>
       </div>
-      <div className={`layout ${view === 'calendar' ? 'calendar-layout' : ''}`}>
-        {view === 'calendar' ? (
+      <div className={`layout ${view === 'calendar' || view === 'chats' ? 'calendar-layout' : ''}`}>
+        {view === 'calendar' && (
           <CalendarView
             meetings={meetings}
             now={now}
             onDeleteMeeting={handleDeleteMeeting}
             onEditMeeting={openEditModal}
           />
-        ) : (
+        )}
+        {view === 'meetings' && (
           <>
             <LobbyList
               lobbies={lobbies}
@@ -1076,6 +1188,100 @@ function App() {
             </div>
           </>
         )}
+        {view === 'chats' && (
+          <div className="chat-layout">
+            <aside className="chat-sidebar">
+              <div className="chat-sidebar-title">Чаты</div>
+              <div className="chat-room-list">
+                {chatRooms.map((room) => (
+                  <button
+                    key={room.id}
+                    className={`chat-room ${activeChatRoom === room.id ? 'active' : ''}`}
+                    onClick={() => selectChatRoom(room.id)}
+                  >
+                    {room.name}
+                  </button>
+                ))}
+              </div>
+            </aside>
+            <section className="chat-panel">
+              <div className="chat-panel-title">
+                #{chatRooms.find((room) => room.id === activeChatRoom)?.name ?? 'чат'}
+              </div>
+              <div className="chat-panel-messages">
+                {activeChatRoom && (chatRoomMessages[activeChatRoom]?.length ?? 0) > 0 ? (
+                  chatRoomMessages[activeChatRoom]?.map((message) => (
+                    <div key={message.id} className="chat-room-message">
+                      <div className="chat-room-avatar" />
+                      <div className="chat-room-message-body">
+                        <div className="chat-room-message-meta">
+                          <span className="chat-room-message-author">{message.displayName}</span>
+                          <span className="chat-room-message-time">
+                            {new Date(message.createdAt).toLocaleTimeString('ru-RU', {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                        </div>
+                        {message.kind === 'text' ? (
+                          <div className="chat-room-message-text">{message.text}</div>
+                        ) : (
+                          <a className="chat-room-message-file" href={message.dataUrl} download={message.fileName}>
+                            {message.fileName}
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="chat-panel-empty">Пока сообщений нет</div>
+                )}
+              </div>
+              <div className="chat-panel-input">
+                <textarea
+                  value={chatRoomInput}
+                  onChange={(event) => setChatRoomInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      handleSendChatRoom();
+                    }
+                  }}
+                  placeholder={`Сообщение в #${activeChatRoom ?? 'чат'}`}
+                  disabled={!activeChatRoom}
+                />
+                <div className="chat-input-bar">
+                  <button
+                    className="chat-input-btn"
+                    onClick={() => chatFileInputRef.current?.click()}
+                    disabled={!activeChatRoom}
+                    aria-label="Прикрепить файл"
+                    title="Прикрепить файл"
+                    type="button"
+                  >
+                    +
+                  </button>
+                  <button
+                    className="chat-input-btn send"
+                    onClick={handleSendChatRoom}
+                    disabled={!activeChatRoom || !chatRoomInput.trim()}
+                    aria-label="Отправить"
+                    title="Отправить"
+                    type="button"
+                  >
+                    ➤
+                  </button>
+                </div>
+                <input
+                  ref={chatFileInputRef}
+                  className="chat-file-input"
+                  type="file"
+                  onChange={handleChatFileSelect}
+                />
+              </div>
+            </section>
+          </div>
+        )}
       </div>
       {screenOverlayPeerId && (
         <div className={`screen-overlay ${screenOverlayOpen ? 'open' : 'hidden'}`}>
@@ -1094,6 +1300,32 @@ function App() {
           </div>
           {screenOverlayLoading && <div className="loading">Загрузка экрана...</div>}
           <video ref={screenOverlayVideoRef} autoPlay playsInline muted />
+        </div>
+      )}
+      {authModalOpen && (
+        <div className="modal auth-modal">
+          <div className="modal-backdrop" />
+          <div className="modal-card">
+            <div className="modal-title">Добро пожаловать</div>
+            <input
+              type="text"
+              placeholder="Имя"
+              value={authFirstName}
+              onChange={(event) => setAuthFirstName(event.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="Фамилия"
+              value={authLastName}
+              onChange={(event) => setAuthLastName(event.target.value)}
+            />
+            {authError && <div className="auth-error">{authError}</div>}
+            <div className="modal-actions">
+              <button className="primary" onClick={handleAuthSubmit} disabled={!isWsReady}>
+                Продолжить
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {lastError && <div className="error">Ошибка: {lastError}</div>}

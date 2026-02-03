@@ -1,0 +1,50 @@
+# Сборка установщика macOS (DMG) для десктопного приложения mettta.space.
+# Запуск: Actions → Build macOS installer → Run workflow.
+name: Build macOS installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check desktop folder
+        run: |
+          if [ ! -d apps/desktop ]; then
+            echo "::error::Папка apps/desktop отсутствует в репозитории."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        run: cd apps/desktop && npm ci
+
+      - name: Build web
+        run: cd apps/desktop && node scripts/build-web.js
+
+      - name: Build Tauri (DMG)
+        run: cd apps/desktop && node scripts/tauri-build.js --bundles dmg
+        env:
+          CI: false
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: metttaspace-macOS-installer
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg

@@ -15,10 +15,15 @@ export class ChatClient {
       open: new Set(),
       close: new Set(),
       welcome: new Set(),
+      authOk: new Set(),
+      authError: new Set(),
       lobbies: new Set(),
       lobbyState: new Set(),
       chatHistory: new Set(),
       chat: new Set(),
+      chatRooms: new Set(),
+      chatRoomHistory: new Set(),
+      chatRoomMessage: new Set(),
       meetings: new Set(),
       signal: new Set(),
       userStatus: new Set(),
@@ -79,6 +84,12 @@ export class ChatClient {
         case 'welcome':
           this.emit('welcome', { clientId: parsed.clientId });
           break;
+        case 'authOk':
+          this.emit('authOk', { token: parsed.token, profile: parsed.profile });
+          break;
+        case 'authError':
+          this.emit('authError', parsed.message);
+          break;
         case 'lobbies':
           this.emit('lobbies', parsed.lobbies);
           break;
@@ -90,6 +101,15 @@ export class ChatClient {
           break;
         case 'chat':
           this.emit('chat', parsed.message);
+          break;
+        case 'chatRooms':
+          this.emit('chatRooms', parsed.rooms);
+          break;
+        case 'chatRoomHistory':
+          this.emit('chatRoomHistory', { roomId: parsed.roomId, messages: parsed.messages });
+          break;
+        case 'chatRoomMessage':
+          this.emit('chatRoomMessage', parsed.message);
           break;
         case 'meetings':
           this.emit('meetings', parsed.meetings);
@@ -134,6 +154,14 @@ export class ChatClient {
     this.send({ type: 'listLobbies' });
   }
 
+  auth(token: string) {
+    this.send({ type: 'auth', token });
+  }
+
+  register(firstName: string, lastName: string) {
+    this.send({ type: 'register', firstName, lastName });
+  }
+
   sendDevice(deviceId: string) {
     this.send({ type: 'clientInfo', deviceId });
   }
@@ -148,6 +176,22 @@ export class ChatClient {
 
   sendChat(text: string) {
     this.send({ type: 'chat', text });
+  }
+
+  listChatRooms() {
+    this.send({ type: 'listChatRooms' });
+  }
+
+  joinChatRoom(roomId: string) {
+    this.send({ type: 'joinChatRoom', roomId });
+  }
+
+  sendChatRoomMessage(roomId: string, text: string) {
+    this.send({ type: 'chatRoomMessage', roomId, text });
+  }
+
+  sendChatRoomFile(roomId: string, payload: { fileName: string; fileType: string; fileSize: number; dataUrl: string }) {
+    this.send({ type: 'chatRoomFile', roomId, ...payload });
   }
 
   listMeetings() {

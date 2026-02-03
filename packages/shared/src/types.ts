@@ -10,6 +10,29 @@ export type ChatMessage = {
   text: string;
   createdAt: string;
 };
+export type ChatRoom = { id: string; name: string };
+export type ChatRoomMessage =
+  | {
+      id: string;
+      roomId: string;
+      userId: string;
+      displayName: string;
+      createdAt: string;
+      kind: 'text';
+      text: string;
+    }
+  | {
+      id: string;
+      roomId: string;
+      userId: string;
+      displayName: string;
+      createdAt: string;
+      kind: 'file';
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+      dataUrl: string;
+    };
 export type Meeting = {
   id: string;
   lobbyId: string;
@@ -20,11 +43,24 @@ export type Meeting = {
 };
 
 export type ClientMessage =
+  | { type: 'auth'; token: string }
+  | { type: 'register'; firstName: string; lastName: string }
   | { type: 'clientInfo'; deviceId: string }
   | { type: 'listLobbies' }
   | { type: 'joinLobby'; lobbyId: string }
   | { type: 'leaveLobby' }
   | { type: 'chat'; text: string }
+  | { type: 'listChatRooms' }
+  | { type: 'joinChatRoom'; roomId: string }
+  | { type: 'chatRoomMessage'; roomId: string; text: string }
+  | {
+      type: 'chatRoomFile';
+      roomId: string;
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+      dataUrl: string;
+    }
   | { type: 'listMeetings' }
   | { type: 'createMeeting'; meeting: { title: string; startsAt: string; durationMin: number } }
   | { type: 'updateMeeting'; meeting: { id: string; title: string; startsAt: string; durationMin: number } }
@@ -37,10 +73,15 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: 'welcome'; clientId: string }
+  | { type: 'authOk'; token: string; profile: { id: string; displayName: string } }
+  | { type: 'authError'; message: string }
   | { type: 'lobbies'; lobbies: LobbyInfo[] }
   | { type: 'lobbyState'; lobbyId: string; users: LobbyUser[] }
   | { type: 'chatHistory'; lobbyId: string; messages: ChatMessage[] }
   | { type: 'chat'; message: ChatMessage }
+  | { type: 'chatRooms'; rooms: ChatRoom[] }
+  | { type: 'chatRoomHistory'; roomId: string; messages: ChatRoomMessage[] }
+  | { type: 'chatRoomMessage'; message: ChatRoomMessage }
   | { type: 'meetings'; meetings: Meeting[] }
   | { type: 'signal'; from: string; payload: unknown }
   | { type: 'userStatus'; userId: string; muted: boolean }
@@ -52,10 +93,15 @@ export type ChatEvents = {
   open: void;
   close: void;
   welcome: { clientId: string };
+  authOk: { token: string; profile: { id: string; displayName: string } };
+  authError: string;
   lobbies: LobbyInfo[];
   lobbyState: { lobbyId: string; users: LobbyUser[] };
   chatHistory: { lobbyId: string; messages: ChatMessage[] };
   chat: ChatMessage;
+  chatRooms: ChatRoom[];
+  chatRoomHistory: { roomId: string; messages: ChatRoomMessage[] };
+  chatRoomMessage: ChatRoomMessage;
   meetings: Meeting[];
   signal: { from: string; payload: unknown };
   userStatus: { userId: string; muted: boolean };

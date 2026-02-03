@@ -1,0 +1,42 @@
+{
+  "productName": "metttaspace",
+  "version": "0.0.1",
+  "identifier": "space.mettta.desktop",
+  "build": {
+    "frontendDist": "../../web/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "cd ../../.. && npm run build:web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "mettta.space",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "nsis"],
+    "icon": [],
+    "shortDescription": "Встречи и чат mettta.space",
+    "longDescription": "Создавайте встречи, общайтесь голосом и в чатах.",
+    "category": "SocialNetworking",
+    "macOS": {
+      "minimumSystemVersion": "10.13"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  },
+  "plugins": {}
+}

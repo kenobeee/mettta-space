@@ -1,9 +1,8 @@
 node_modules
 dist
-dist-electron
 out
 build
-web-dist
+apps/desktop/dist
 apps/desktop/web-dist
 *.AppImage
 *.exe

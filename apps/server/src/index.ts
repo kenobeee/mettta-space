@@ -3,7 +3,16 @@ import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { ChatMessage, ClientMessage, LobbyInfo, LobbyUser, Meeting, ServerMessage } from '@chat/shared';
+import type {
+  ChatMessage,
+  ChatRoom,
+  ChatRoomMessage,
+  ClientMessage,
+  LobbyInfo,
+  LobbyUser,
+  Meeting,
+  ServerMessage
+} from '@chat/shared';
 import { writeClientLog } from './logger';
 
 type TrackedSocket = WebSocket & { isAlive?: boolean };
@@ -11,6 +20,8 @@ type TrackedSocket = WebSocket & { isAlive?: boolean };
 const PORT = Number(process.env.PORT ?? 3001);
 const DATA_DIR = join(process.cwd(), 'data');
 const MEETINGS_FILE = join(DATA_DIR, 'meetings.json');
+const USERS_FILE = join(DATA_DIR, 'users.json');
+const CHAT_ROOMS_FILE = join(DATA_DIR, 'chat_rooms.json');
 
 const httpServer = createServer();
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
@@ -18,14 +29,39 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 const sockets = new Map<string, TrackedSocket>();
 const lobbyByClient = new Map<string, string>(); // clientId -> lobbyId
 const lobbyUsers = new Map<string, LobbyUser[]>(); // lobbyId -> users
-const displayNames = new Map<string, string>();
 const deviceToClient = new Map<string, string>(); // deviceId -> clientId
 const mutedState = new Map<string, boolean>(); // clientId -> muted
-const muted = new Map<string, boolean>(); // clientId -> muted
 const screenSharerByLobby = new Map<string, string | null>();
 const handState = new Map<string, boolean>(); // clientId -> hand
 const chatHistoryByLobby = new Map<string, ChatMessage[]>();
 const meetingsById = new Map<string, Meeting>();
+const usersById = new Map<string, UserProfile>();
+const tokenToUserId = new Map<string, string>();
+const clientToUserId = new Map<string, string>();
+const chatHistoryByRoom = new Map<string, ChatRoomMessage[]>();
+
+type UserProfile = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  token: string;
+  createdAt: string;
+};
+
+const CHAT_ROOMS: ChatRoom[] = [
+  { id: 'frontend', name: 'frontend' },
+  { id: 'backend php', name: 'backend php' },
+  { id: 'backend nodejs', name: 'backend nodejs' },
+  { id: 'general', name: 'general' },
+  { id: 'releases', name: 'releases' },
+  { id: 'absence', name: 'absence' },
+  { id: 'support', name: 'support' },
+  { id: 'managment', name: 'managment' },
+  { id: 'production', name: 'production' }
+];
+
+const MAX_CHAT_FILE_BYTES = 5 * 1024 * 1024;
 
 const isSameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -66,6 +102,49 @@ const loadMeetings = () => {
   }
 };
 
+const saveUsers = () => {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const payload = Array.from(usersById.values());
+  writeFileSync(USERS_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+};
+
+const loadUsers = () => {
+  if (!existsSync(USERS_FILE)) return;
+  try {
+    const raw = JSON.parse(readFileSync(USERS_FILE, 'utf-8')) as UserProfile[];
+    raw.forEach((user) => {
+      if (!user?.id || !user?.token) return;
+      usersById.set(user.id, user);
+      tokenToUserId.set(user.token, user.id);
+    });
+  } catch {
+    // ignore corrupted file
+  }
+};
+
+const saveChatRooms = () => {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const payload: Record<string, ChatRoomMessage[]> = {};
+  for (const room of CHAT_ROOMS) {
+    payload[room.id] = chatHistoryByRoom.get(room.id) ?? [];
+  }
+  writeFileSync(CHAT_ROOMS_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+};
+
+const loadChatRooms = () => {
+  if (!existsSync(CHAT_ROOMS_FILE)) return;
+  try {
+    const raw = JSON.parse(readFileSync(CHAT_ROOMS_FILE, 'utf-8')) as Record<string, ChatRoomMessage[]>;
+    Object.entries(raw).forEach(([roomId, messages]) => {
+      if (!CHAT_ROOMS.find((room) => room.id === roomId)) return;
+      if (!Array.isArray(messages)) return;
+      chatHistoryByRoom.set(roomId, messages.slice(-200));
+    });
+  } catch {
+    // ignore corrupted file
+  }
+};
+
 const getMeetingLobbies = (now = new Date()): LobbyInfo[] => {
   const list = Array.from(meetingsById.values())
     .filter((meeting) => {
@@ -81,118 +160,9 @@ const getMeetingLobbies = (now = new Date()): LobbyInfo[] => {
   return list;
 };
 
-const randomName = () => {
-  const names = [
-    'Наруто',
-    'Саске',
-    'Сакура',
-    'Какаши',
-    'Итачи',
-    'Мадара',
-    'Хината',
-    'Шикамару',
-    'Гаара',
-    'Боруто',
-    'Сарада',
-    'Мицуки',
-    'Луффи',
-    'Зоро',
-    'Нами',
-    'Санджи',
-    'Усопп',
-    'Чоппер',
-    'Робин',
-    'Фрэнки',
-    'Брук',
-    'Шэнкс',
-    'Гоку',
-    'Вегета',
-    'Гохан',
-    'Транкс',
-    'Булма',
-    'Пикколо',
-    'Джинан',
-    'Ванпанч',
-    'Сайтама',
-    'Генос',
-    'Тацумакі',
-    'Вэш',
-    'Милле',
-    'Декуро',
-    'Бакуго',
-    'Тодороки',
-    'Урарака',
-    'Айзава',
-    'АллМайт',
-    'Хоукс',
-    'Эндеавор',
-    'Гон',
-    'Киллуа',
-    'Курапика',
-    'Хисока',
-    'Неферпиту',
-    'Эрен',
-    'Микаса',
-    'Армин',
-    'Леви',
-    'Эрвин',
-    'Ханджи',
-    'История',
-    'Ймир',
-    'Танджиро',
-    'Незуко',
-    'Зеницу',
-    'Иноске',
-    'Шинобу',
-    'Ренгоку',
-    'Музан',
-    'Аня',
-    'Йор',
-    'Лойд',
-    'Годжо',
-    'Итадори',
-    'Фусигуро',
-    'Нобара',
-    'Нанами',
-    'Рюмен',
-    'Эдвард',
-    'Альфонс',
-    'Мустанг',
-    'Армстронг',
-    'Винри',
-    'Спайк',
-    'Фэй',
-    'Джетт',
-    'ЭдвардЭлрик',
-    'Вайолет',
-    'Легоси',
-    'Рем',
-    'Рам',
-    'Эмилия',
-    'Сэйбер',
-    'Рин',
-    'Широ',
-    'Кира',
-    'Лайт',
-    'Эл',
-    'Миса',
-    'Сижу',
-    'Холо',
-    'Нацу',
-    'Люси',
-    'Эрза',
-    'Грэй',
-    'Мака',
-    'Соуля',
-    'Юкино',
-    'Кагуя',
-    'Чика',
-    'Хаясака'
-  ];
-  return names[Math.floor(Math.random() * names.length)];
-};
-
 loadMeetings();
+loadUsers();
+loadChatRooms();
 
 const sendSafe = (ws: WebSocket, message: ServerMessage) => {
   if (ws.readyState === WebSocket.OPEN) {
@@ -228,6 +198,28 @@ const sendMeetings = (clientId: string) => {
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
   );
   sendToClient(clientId, { type: 'meetings', meetings });
+};
+
+const getUserProfile = (clientId: string): UserProfile | undefined => {
+  const userId = clientToUserId.get(clientId);
+  if (!userId) return undefined;
+  return usersById.get(userId);
+};
+
+const sendChatRooms = (clientId: string) => {
+  sendToClient(clientId, { type: 'chatRooms', rooms: CHAT_ROOMS });
+};
+
+const sendChatRoomHistory = (clientId: string, roomId: string) => {
+  const messages = chatHistoryByRoom.get(roomId) ?? [];
+  sendToClient(clientId, { type: 'chatRoomHistory', roomId, messages });
+};
+
+const broadcastChatRoomMessage = (_roomId: string, message: ChatRoomMessage) => {
+  for (const clientId of sockets.keys()) {
+    if (!clientToUserId.has(clientId)) continue;
+    sendToClient(clientId, { type: 'chatRoomMessage', message });
+  }
 };
 
 const sendLobbyState = (lobbyId: string) => {
@@ -267,7 +259,6 @@ const leaveCurrentLobby = (clientId: string) => {
     chatHistoryByLobby.delete(lobbyId);
   }
   lobbyByClient.delete(clientId);
-  muted.delete(clientId);
   if (screenSharerByLobby.get(lobbyId) === clientId) {
     screenSharerByLobby.set(lobbyId, null);
   }
@@ -311,8 +302,68 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
     return;
   }
 
+  const requireAuth = () => {
+    if (!clientToUserId.has(clientId)) {
+      sendToClient(clientId, { type: 'authError', message: 'Нужно авторизоваться' });
+      return false;
+    }
+    return true;
+  };
+
   switch (data.type) {
+    case 'auth': {
+      const token = data.token?.trim();
+      if (!token) {
+        sendToClient(clientId, { type: 'authError', message: 'Нужен токен' });
+        return;
+      }
+      const userId = tokenToUserId.get(token);
+      if (!userId || !usersById.has(userId)) {
+        sendToClient(clientId, { type: 'authError', message: 'Некорректный токен' });
+        return;
+      }
+      clientToUserId.set(clientId, userId);
+      const user = usersById.get(userId)!;
+      sendToClient(clientId, { type: 'authOk', token, profile: { id: user.id, displayName: user.displayName } });
+      sendChatRooms(clientId);
+      sendToClient(clientId, { type: 'lobbies', lobbies: getMeetingLobbies() });
+      sendMeetings(clientId);
+      break;
+    }
+    case 'register': {
+      const firstName = data.firstName?.trim();
+      const lastName = data.lastName?.trim();
+      if (!firstName || !lastName) {
+        sendToClient(clientId, { type: 'authError', message: 'Введите имя и фамилию' });
+        return;
+      }
+      if (firstName.length > 40 || lastName.length > 40) {
+        sendToClient(clientId, { type: 'authError', message: 'Имя или фамилия слишком длинные' });
+        return;
+      }
+      const token = randomUUID();
+      const userId = randomUUID();
+      const displayName = `${firstName} ${lastName}`.trim();
+      const profile: UserProfile = {
+        id: userId,
+        firstName,
+        lastName,
+        displayName,
+        token,
+        createdAt: new Date().toISOString()
+      };
+      usersById.set(userId, profile);
+      tokenToUserId.set(token, userId);
+      clientToUserId.set(clientId, userId);
+      saveUsers();
+      sendToClient(clientId, { type: 'authOk', token, profile: { id: profile.id, displayName: profile.displayName } });
+      sendChatRooms(clientId);
+      sendToClient(clientId, { type: 'lobbies', lobbies: getMeetingLobbies() });
+      sendMeetings(clientId);
+      break;
+    }
     case 'listLobbies': {
+      if (!requireAuth()) return;
       broadcastLobbies();
       break;
     }
@@ -333,6 +384,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'joinLobby': {
+      if (!requireAuth()) return;
       const meeting = meetingsById.get(data.lobbyId);
       if (!meeting) {
         sendToClient(clientId, { type: 'error', message: 'Встреча не найдена' });
@@ -363,9 +415,12 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
         return;
       }
       leaveCurrentLobby(clientId);
-      const name = displayNames.get(clientId) ?? randomName();
-      displayNames.set(clientId, name);
-      lobbyUsers.set(lobbyId, [...users, { id: clientId, displayName: name, muted: mutedState.get(clientId) ?? false }]);
+      const profile = getUserProfile(clientId);
+      const displayName = profile?.displayName ?? 'Пользователь';
+      lobbyUsers.set(lobbyId, [
+        ...users,
+        { id: clientId, displayName, muted: mutedState.get(clientId) ?? false }
+      ]);
       lobbyByClient.set(clientId, lobbyId);
       broadcastLobbies();
       sendLobbyState(lobbyId);
@@ -373,10 +428,12 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'leaveLobby': {
+      if (!requireAuth()) return;
       leaveCurrentLobby(clientId);
       break;
     }
     case 'signal': {
+      if (!requireAuth()) return;
       const targetId = data.targetId;
       if (!targetId) {
         sendToClient(clientId, { type: 'error', message: 'Нет получателя' });
@@ -394,6 +451,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'status': {
+      if (!requireAuth()) return;
       mutedState.set(clientId, !!data.muted);
       const lobbyId = lobbyByClient.get(clientId);
       if (lobbyId) {
@@ -407,6 +465,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'screenShare': {
+      if (!requireAuth()) return;
       const lobbyId = lobbyByClient.get(clientId);
       if (!lobbyId) break;
       const current = screenSharerByLobby.get(lobbyId) ?? null;
@@ -434,6 +493,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'hand': {
+      if (!requireAuth()) return;
       const lobbyId = lobbyByClient.get(clientId);
       if (!lobbyId) break;
       handState.set(clientId, !!data.raised);
@@ -449,10 +509,12 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'listMeetings': {
+      if (!requireAuth()) return;
       sendMeetings(clientId);
       break;
     }
     case 'createMeeting': {
+      if (!requireAuth()) return;
       const meeting = data.meeting;
       const title = meeting.title?.trim();
       if (!title || title.length > 80) {
@@ -494,6 +556,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'updateMeeting': {
+      if (!requireAuth()) return;
       const meeting = data.meeting;
       const existing = meetingsById.get(meeting.id);
       if (!existing) {
@@ -537,6 +600,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'deleteMeeting': {
+      if (!requireAuth()) return;
       if (!meetingsById.has(data.id)) {
         sendToClient(clientId, { type: 'error', message: 'Встреча не найдена' });
         return;
@@ -548,6 +612,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       break;
     }
     case 'chat': {
+      if (!requireAuth()) return;
       const lobbyId = lobbyByClient.get(clientId);
       if (!lobbyId) break;
       const text = data.text?.trim();
@@ -560,7 +625,7 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
         id: randomUUID(),
         lobbyId,
         userId: clientId,
-        displayName: displayNames.get(clientId) ?? 'Пользователь',
+        displayName: getUserProfile(clientId)?.displayName ?? 'Пользователь',
         text,
         createdAt: new Date().toISOString()
       };
@@ -569,6 +634,94 @@ const handleMessage = (clientId: string, raw: WebSocket.RawData) => {
       if (history.length > 50) history.splice(0, history.length - 50);
       chatHistoryByLobby.set(lobbyId, history);
       broadcastChat(lobbyId, message);
+      break;
+    }
+    case 'listChatRooms': {
+      if (!requireAuth()) return;
+      sendChatRooms(clientId);
+      break;
+    }
+    case 'joinChatRoom': {
+      if (!requireAuth()) return;
+      const roomId = data.roomId;
+      if (!CHAT_ROOMS.find((room) => room.id === roomId)) {
+        sendToClient(clientId, { type: 'error', message: 'Чат не найден' });
+        return;
+      }
+      sendChatRoomHistory(clientId, roomId);
+      break;
+    }
+    case 'chatRoomMessage': {
+      if (!requireAuth()) return;
+      const roomId = data.roomId;
+      if (!CHAT_ROOMS.find((room) => room.id === roomId)) {
+        sendToClient(clientId, { type: 'error', message: 'Чат не найден' });
+        return;
+      }
+      const text = data.text?.trim();
+      if (!text) return;
+      if (text.length > 1000) {
+        sendToClient(clientId, { type: 'error', message: 'Сообщение слишком длинное' });
+        return;
+      }
+      const message: ChatRoomMessage = {
+        id: randomUUID(),
+        roomId,
+        userId: clientToUserId.get(clientId) ?? '',
+        displayName: getUserProfile(clientId)?.displayName ?? 'Пользователь',
+        createdAt: new Date().toISOString(),
+        kind: 'text',
+        text
+      };
+      const history = chatHistoryByRoom.get(roomId) ?? [];
+      history.push(message);
+      if (history.length > 200) history.splice(0, history.length - 200);
+      chatHistoryByRoom.set(roomId, history);
+      saveChatRooms();
+      broadcastChatRoomMessage(roomId, message);
+      break;
+    }
+    case 'chatRoomFile': {
+      if (!requireAuth()) return;
+      const roomId = data.roomId;
+      if (!CHAT_ROOMS.find((room) => room.id === roomId)) {
+        sendToClient(clientId, { type: 'error', message: 'Чат не найден' });
+        return;
+      }
+      const fileName = data.fileName?.trim();
+      const fileType = data.fileType?.trim();
+      const fileSize = Number(data.fileSize);
+      const dataUrl = data.dataUrl;
+      if (!fileName || !fileType || !dataUrl) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректный файл' });
+        return;
+      }
+      if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_CHAT_FILE_BYTES) {
+        sendToClient(clientId, { type: 'error', message: 'Слишком большой файл' });
+        return;
+      }
+      if (!dataUrl.startsWith('data:')) {
+        sendToClient(clientId, { type: 'error', message: 'Некорректный формат файла' });
+        return;
+      }
+      const message: ChatRoomMessage = {
+        id: randomUUID(),
+        roomId,
+        userId: clientToUserId.get(clientId) ?? '',
+        displayName: getUserProfile(clientId)?.displayName ?? 'Пользователь',
+        createdAt: new Date().toISOString(),
+        kind: 'file',
+        fileName,
+        fileType,
+        fileSize,
+        dataUrl
+      };
+      const history = chatHistoryByRoom.get(roomId) ?? [];
+      history.push(message);
+      if (history.length > 200) history.splice(0, history.length - 200);
+      chatHistoryByRoom.set(roomId, history);
+      saveChatRooms();
+      broadcastChatRoomMessage(roomId, message);
       break;
     }
     case 'clientLog': {
@@ -584,11 +737,8 @@ wss.on('connection', (socket: TrackedSocket) => {
   const clientId = randomUUID();
   sockets.set(clientId, socket);
   socket.isAlive = true;
-  displayNames.set(clientId, randomName());
 
   sendToClient(clientId, { type: 'welcome', clientId });
-  sendToClient(clientId, { type: 'lobbies', lobbies: getMeetingLobbies() });
-  sendMeetings(clientId);
 
   socket.on('pong', () => {
     socket.isAlive = true;
@@ -599,7 +749,7 @@ wss.on('connection', (socket: TrackedSocket) => {
   socket.on('close', () => {
     leaveCurrentLobby(clientId);
     sockets.delete(clientId);
-    displayNames.delete(clientId);
+    clientToUserId.delete(clientId);
     for (const [device, cid] of deviceToClient.entries()) {
       if (cid === clientId) deviceToClient.delete(device);
     }
@@ -616,7 +766,7 @@ const heartbeat = setInterval(() => {
       ws.terminate();
       leaveCurrentLobby(id);
       sockets.delete(id);
-      displayNames.delete(id);
+      clientToUserId.delete(id);
       continue;
     }
     ws.isAlive = false;

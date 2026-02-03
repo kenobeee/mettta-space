@@ -1,29 +1,17 @@
 {
   "name": "desktop",
-  "private": true,
   "version": "0.0.1",
-  "description": "Desktop shell for mettta.space (Electron)",
-  "author": "mettta.space",
-  "main": "main.js",
+  "private": true,
+  "description": "Desktop shell for mettta.space (Tauri)",
   "scripts": {
-    "dev": "ELECTRON_START_URL=http://localhost:5173 electron .",
-    "build:installers": "rm -rf web-dist && cp -r ../web/dist ./web-dist && npx electron-builder -m --x64"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "node scripts/tauri-build.js",
+    "build:macos": "node scripts/build-web.js && node scripts/tauri-build.js --bundles dmg",
+    "build:windows": "node scripts/build-web.js && node scripts/tauri-build.js --bundles nsis",
+    "build:web": "node scripts/build-web.js"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^26.4.0"
-  },
-  "build": {
-    "appId": "space.mettta.desktop",
-    "productName": "metttaspace",
-    "artifactName": "metttaspace-${version}-${os}-${arch}.${ext}",
-    "electronVersion": "33.2.0",
-    "files": [
-      "**/*",
-      "web-dist/**/*"
-    ],
-    "mac": {
-      "category": "public.app-category.social-networking"
-    }
+    "@tauri-apps/cli": "^2"
   }
 }
