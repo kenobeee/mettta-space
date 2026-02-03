@@ -9,7 +9,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const require = createRequire(path.join(root, 'package.json'));
+const repoRoot = path.resolve(root, '..', '..');
+// Resolve from repo root so we find typescript/vite in hoisted node_modules (CI).
+const require = createRequire(path.join(repoRoot, 'package.json'));
 
 const tscPath = require.resolve('typescript/bin/tsc');
 const vitePkgDir = path.dirname(require.resolve('vite/package.json'));
