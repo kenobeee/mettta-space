@@ -5,9 +5,9 @@
   "type": "module",
   "description": "WebSocket signaling server for random video chat",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "NODE_ENV=production tsx src/index.ts",
-    "lint": "eslint . --ext .ts"
+    "dev": "npx tsx watch src/index.ts",
+    "start": "NODE_ENV=production npx tsx src/index.ts",
+    "lint": "npx eslint . --ext .ts"
   },
   "dependencies": {
     "@chat/shared": "file:../packages/shared",

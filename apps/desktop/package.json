@@ -4,8 +4,8 @@
   "private": true,
   "description": "Desktop shell for mettta.space (Tauri)",
   "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev",
+    "tauri": "npx tauri",
+    "dev": "npx tauri dev",
     "build": "node scripts/tauri-build.js",
     "build:macos": "node scripts/build-web.js && node scripts/tauri-build.js --bundles dmg",
     "build:windows": "node scripts/build-web.js && node scripts/tauri-build.js --bundles nsis",
