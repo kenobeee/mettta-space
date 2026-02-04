@@ -1,7 +1,7 @@
 # Сборка установщика macOS (DMG) для десктопного приложения mettta.space.
 # Продовая установка: настройте секреты (см. docs/macos-signing.md) для подписи и нотаризации.
-# Запуск: Actions → Build macOS installer → Run workflow.
-name: Build macOS installer
+# Запуск: Actions → Build desktop (macOS) → Run workflow.
+name: Build desktop (macOS)
 
 on:
   workflow_dispatch:
