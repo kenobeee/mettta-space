@@ -1,0 +1,36 @@
+name: Build desktop (macOS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install
+        run: npm ci
+
+      - name: Build web
+        run: cd apps/desktop && node scripts/build-web.js
+
+      - name: Build Tauri (DMG)
+        run: cd apps/desktop && node scripts/tauri-build.js --bundles dmg
+        env:
+          CI: false
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: metttaspace-macOS-installer
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
