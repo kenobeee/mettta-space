@@ -17,7 +17,8 @@
         "height": 800,
         "resizable": true,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600,
+        "devtools": false
       }
     ]
   },
@@ -29,7 +30,8 @@
     "longDescription": "Создавайте встречи, общайтесь голосом и в чатах.",
     "category": "SocialNetworking",
     "macOS": {
-      "minimumSystemVersion": "10.13"
+      "minimumSystemVersion": "10.13",
+      "signingIdentity": "-"
     },
     "windows": {
       "webviewInstallMode": {
